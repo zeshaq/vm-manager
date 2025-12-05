@@ -269,9 +269,14 @@ def update_boot_order(uuid):
                     ET.SubElement(os_node, 'boot', {'dev': dev_map[type_]})
             apply_order(boot1, 1)
             apply_order(boot2, 2)
-            dom.defineXML(ET.tostring(tree).decode())
-        except libvirt.libvirtError as e: return f"Error: {e}"
-        finally: conn.close()
+            
+            # 3. Save (Corrected: Use conn.defineXML)
+            conn.defineXML(ET.tostring(tree).decode())
+
+        except libvirt.libvirtError as e:
+            return f"Error: {e}"
+        finally:
+            conn.close()
     return redirect(url_for('listing.view_vm', uuid=uuid))
 
 @listing_bp.route('/disk/add/<uuid>', methods=['POST'])
@@ -385,7 +390,10 @@ def edit_vm(uuid):
             curr.set('unit', 'KiB')
         vcpu = tree.find('vcpu')
         if vcpu is not None: vcpu.text = str(new_cpu)
-        dom.defineXML(ET.tostring(tree).decode())
+        
+        # Corrected: Use conn.defineXML
+        conn.defineXML(ET.tostring(tree).decode())
+        
         conn.close()
         return redirect(url_for('listing.view_vm', uuid=uuid))
     info = dom.info()
