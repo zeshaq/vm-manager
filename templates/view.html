@@ -20,35 +20,41 @@
         </div>
     </div>
 
-    <!-- SPECS & BOOT GRID -->
-    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 30px; margin-bottom: 30px;">
-        <!-- Resources -->
-        <div>
-            <h3 style="color: #444;">Resources</h3>
-            <table style="width: 100%; border: none;">
-                <tr><td style="padding: 8px 0; border-bottom: 1px solid #eee;"><strong>vCPUs:</strong></td><td style="border-bottom: 1px solid #eee;">{{ vm.vcpus }}</td></tr>
-                <tr><td style="padding: 8px 0; border-bottom: 1px solid #eee;"><strong>Memory:</strong></td><td style="border-bottom: 1px solid #eee;">{{ vm.memory_mb }} MB</td></tr>
-            </table>
-        </div>
+    <!-- RESOURCES SECTION -->
+    <div style="margin-bottom: 30px;">
+        <h3 style="color: #444; border-bottom: 1px solid #eee; padding-bottom: 10px;">Resources</h3>
+        <table style="width: 100%; border: none; max-width: 400px;">
+            <tr>
+                <td style="padding: 8px 0; border-bottom: 1px solid #eee; width: 120px;"><strong>vCPUs:</strong></td>
+                <td style="border-bottom: 1px solid #eee;">{{ vm.vcpus }}</td>
+            </tr>
+            <tr>
+                <td style="padding: 8px 0; border-bottom: 1px solid #eee;"><strong>Memory:</strong></td>
+                <td style="border-bottom: 1px solid #eee;">{{ vm.memory_mb }} MB</td>
+            </tr>
+        </table>
+    </div>
+    
+    <!-- BOOT CONFIGURATION (Horizontally Stacked) -->
+    <div style="margin-bottom: 40px;">
+        <h3 style="color: #444; border-bottom: 1px solid #eee; padding-bottom: 10px;">Boot Configuration</h3>
         
-        <!-- Boot Config -->
-        <div>
-            <h3 style="color: #444;">Boot Configuration</h3>
+        <div style="display: flex; gap: 20px; align-items: stretch;">
             
-            <!-- NEW: Current Boot Order Display Block -->
-            <div style="background: #f1f8ff; border: 1px solid #cce5ff; padding: 15px; border-radius: 4px; margin-bottom: 15px;">
-                <strong style="color: #004085; display: block; margin-bottom: 5px; font-size: 0.9em;">CURRENT BOOT PRIORITY:</strong>
-                <ol style="margin: 0; padding-left: 20px; font-size: 0.95em; color: #333;">
-                    <!-- 1st Device -->
-                    <li style="margin-bottom: 2px;">
+            <!-- LEFT: Current Status -->
+            <div style="flex: 1; background: #f1f8ff; border: 1px solid #cce5ff; padding: 20px; border-radius: 6px;">
+                <strong style="color: #004085; display: block; margin-bottom: 10px; font-size: 1em; text-transform: uppercase; letter-spacing: 0.5px;">Current Boot Order</strong>
+                <ol style="margin: 0; padding-left: 20px; color: #333; line-height: 1.6;">
+                    <li style="margin-bottom: 5px;">
+                        <span style="font-weight: bold;">Priority 1:</span> 
                         {% if vm.current_boot['1'] == 'network' %} Network (PXE)
                         {% elif vm.current_boot['1'] and 'disk|' in vm.current_boot['1'] %} Disk ({{ vm.current_boot['1'].split('|')[1] }})
                         {% elif vm.current_boot['1'] == 'hd_generic' %} Hard Disk (Generic)
                         {% elif vm.current_boot['1'] == 'cdrom_generic' %} CD-ROM (Generic)
                         {% else %} Not Set {% endif %}
                     </li>
-                    <!-- 2nd Device -->
                     <li>
+                        <span style="font-weight: bold;">Priority 2:</span>
                         {% if vm.current_boot['2'] == 'network' %} Network (PXE)
                         {% elif vm.current_boot['2'] and 'disk|' in vm.current_boot['2'] %} Disk ({{ vm.current_boot['2'].split('|')[1] }})
                         {% elif vm.current_boot['2'] == 'hd_generic' %} Hard Disk (Generic)
@@ -58,14 +64,13 @@
                 </ol>
             </div>
 
-            <!-- Edit Form -->
-            <div style="background: #f9f9f9; padding: 15px; border-radius: 4px; border: 1px solid #eee;">
-                <form action="{{ url_for('listing.update_boot_order', uuid=vm.uuid) }}" method="POST">
+            <!-- RIGHT: Edit Form -->
+            <div style="flex: 1; background: #f9f9f9; padding: 20px; border-radius: 6px; border: 1px solid #eee;">
+                <form action="{{ url_for('listing.update_boot_order', uuid=vm.uuid) }}" method="POST" style="display: flex; flex-direction: column; height: 100%;">
                     
-                    <!-- Boot 1 -->
-                    <div style="margin-bottom: 10px;">
-                        <label style="font-size:0.9em; font-weight:bold;">1st Boot Device:</label>
-                        <select name="boot1" style="padding: 5px; width: 100%;">
+                    <div style="margin-bottom: 15px;">
+                        <label style="font-size:0.85em; font-weight:bold; color: #555; display: block; margin-bottom: 5px;">1st Boot Device</label>
+                        <select name="boot1" style="padding: 8px; width: 100%; border: 1px solid #ccc; border-radius: 4px;">
                             <option value="network" {% if vm.current_boot['1'] == 'network' %}selected{% endif %}>Network (PXE)</option>
                             <option disabled>--- Disks ---</option>
                             {% for disk in vm.disks %}
@@ -80,10 +85,9 @@
                         </select>
                     </div>
 
-                    <!-- Boot 2 -->
-                    <div style="margin-bottom: 10px;">
-                        <label style="font-size:0.9em; font-weight:bold;">2nd Boot Device:</label>
-                        <select name="boot2" style="padding: 5px; width: 100%;">
+                    <div style="margin-bottom: 15px;">
+                        <label style="font-size:0.85em; font-weight:bold; color: #555; display: block; margin-bottom: 5px;">2nd Boot Device</label>
+                        <select name="boot2" style="padding: 8px; width: 100%; border: 1px solid #ccc; border-radius: 4px;">
                             <option value="none">None</option>
                             <option value="network" {% if vm.current_boot['2'] == 'network' %}selected{% endif %}>Network (PXE)</option>
                             <option disabled>--- Disks ---</option>
@@ -96,8 +100,10 @@
                         </select>
                     </div>
 
-                    <button type="submit" style="background: #007bff; color:white; border:none; padding: 6px 12px; border-radius:4px; font-size:0.9em; cursor:pointer;">Save Boot Order</button>
-                    <div style="font-size:0.8em; color:#888; margin-top:5px;">* Applies on next restart</div>
+                    <div style="margin-top: auto; display: flex; align-items: center; justify-content: space-between;">
+                        <div style="font-size:0.8em; color:#888;">* Applies on next restart</div>
+                        <button type="submit" style="background: #007bff; color:white; border:none; padding: 8px 20px; border-radius:4px; font-size:0.9em; cursor:pointer;">Save Changes</button>
+                    </div>
                 </form>
             </div>
         </div>

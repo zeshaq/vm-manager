@@ -51,14 +51,20 @@ def create_vm():
             # CPU Passthrough Checkbox
             use_host_cpu = request.form.get('host_cpu') == 'on'
 
-            # Generate XML without disks
+            # Generate XML
             xml_config = generate_vm_xml(name, ram, cpu, use_host_cpu)
 
             conn = libvirt.open('qemu:///system')
             if conn:
-                conn.defineXML(xml_config)
+                # defineXML returns the Domain object
+                dom = conn.defineXML(xml_config)
+                
+                # Get UUID for redirection
+                new_uuid = dom.UUIDString()
                 conn.close()
-                return redirect(url_for('listing.list_vms'))
+                
+                # Redirect directly to the View page
+                return redirect(url_for('listing.view_vm', uuid=new_uuid))
                 
         except Exception as e:
             return f"<h1>Error Creating VM</h1><p>{e}</p><a href='/create'>Try Again</a>"
