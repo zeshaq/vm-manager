@@ -38,7 +38,10 @@
     </div>
 
     <div style="margin-bottom: 30px;">
-        <h3 style="color: #444;">Network Interfaces</h3>
+        <div style="display:flex; justify-content:space-between; align-items:center;">
+            <h3 style="color: #444;">Network Interfaces</h3>
+        </div>
+
         <table style="width: 100%; border-collapse: collapse; font-size: 0.9em; border: 1px solid #eee;">
             <thead style="background: #f8f9fa;">
                 <tr>
@@ -46,6 +49,7 @@
                     <th style="padding: 10px; border-bottom: 2px solid #ddd; text-align: left;">Source</th>
                     <th style="padding: 10px; border-bottom: 2px solid #ddd; text-align: left;">MAC Address</th>
                     <th style="padding: 10px; border-bottom: 2px solid #ddd; text-align: left;">IP Address</th>
+                    <th style="padding: 10px; border-bottom: 2px solid #ddd; text-align: right;">Action</th>
                 </tr>
             </thead>
             <tbody>
@@ -67,13 +71,29 @@
                                 <span style="color: #999;">-</span>
                             {% endif %}
                         </td>
+                        <td style="padding: 10px; text-align: right;">
+                            <form action="{{ url_for('listing.delete_interface', uuid=vm.uuid) }}" method="POST" style="display:inline;">
+                                <input type="hidden" name="mac" value="{{ iface.mac }}">
+                                <button type="submit" onclick="return confirm('Remove this network interface?')" 
+                                        style="background: transparent; color: #dc3545; border: 1px solid #dc3545; padding: 4px 8px; border-radius: 4px; font-size: 0.8em;">
+                                    Remove
+                                </button>
+                            </form>
+                        </td>
                     </tr>
                     {% endfor %}
                 {% else %}
-                    <tr><td colspan="4" style="padding:15px; text-align:center; color:#777;">No network interfaces found.</td></tr>
+                    <tr><td colspan="5" style="padding:15px; text-align:center; color:#777;">No network interfaces found.</td></tr>
                 {% endif %}
             </tbody>
         </table>
+
+        <form action="{{ url_for('listing.add_interface', uuid=vm.uuid) }}" method="POST" style="background: #f1f1f1; padding: 15px; margin-top: 15px; border-radius: 5px; display: flex; align-items: center; gap: 10px;">
+            <strong style="color:#555; font-size: 0.9em;">Add Interface:</strong>
+            <input type="text" name="network" placeholder="Network Name (e.g. default)" value="default" required 
+                   style="padding: 6px; border: 1px solid #ccc; border-radius: 4px; width: 200px; margin:0;">
+            <button type="submit" style="background: #28a745; font-size: 0.9em; padding: 6px 12px;">+ Attach</button>
+        </form>
     </div>
 
     <div style="background: #f8f9fa; padding: 20px; border-radius: 8px;">
