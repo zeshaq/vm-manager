@@ -10,31 +10,50 @@
         </div>
     </div>
 
-    <!-- CREATE DISK FORM -->
-    <div style="background: white; padding: 20px; border-radius: 8px; margin-bottom: 30px; box-shadow: 0 1px 3px rgba(0,0,0,0.1);">
-        <h3 style="margin-top: 0; color: #444;">Create New Disk Image</h3>
-        <form action="{{ url_for('storage.create_disk') }}" method="POST" style="display: flex; align-items: flex-end; gap: 15px;">
-            
-            <div style="flex-grow: 1;">
-                <label style="display: block; font-weight: bold; margin-bottom: 5px;">Name</label>
-                <input type="text" name="name" placeholder="new-disk-name" required style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px;">
-            </div>
+    <!-- ACTIONS GRID -->
+    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 30px;">
+        
+        <!-- CREATE DISK FORM -->
+        <div style="background: white; padding: 20px; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.1);">
+            <h3 style="margin-top: 0; color: #444;">Create Disk</h3>
+            <form action="{{ url_for('storage.create_disk') }}" method="POST">
+                <div style="margin-bottom: 10px;">
+                    <label style="font-weight: bold; font-size: 0.9em;">Name</label>
+                    <input type="text" name="name" placeholder="data-disk" required>
+                </div>
+                <div style="display: flex; gap: 10px;">
+                    <div style="flex: 1;">
+                        <label style="font-weight: bold; font-size: 0.9em;">Size (GB)</label>
+                        <input type="number" name="size" value="10" min="1" required>
+                    </div>
+                    <div style="flex: 1;">
+                        <label style="font-weight: bold; font-size: 0.9em;">Format</label>
+                        <select name="format" style="padding: 9px; background: white;">
+                            <option value="qcow2">qcow2</option>
+                            <option value="raw">raw</option>
+                        </select>
+                    </div>
+                </div>
+                <button type="submit" style="width: 100%; margin-top: 15px; background: #28a745;">Create Image</button>
+            </form>
+        </div>
 
-            <div style="width: 120px;">
-                <label style="display: block; font-weight: bold; margin-bottom: 5px;">Size (GB)</label>
-                <input type="number" name="size" value="10" min="1" required style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px;">
-            </div>
+        <!-- UPLOAD ISO FORM -->
+        <div style="background: white; padding: 20px; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.1);">
+            <h3 style="margin-top: 0; color: #444;">Upload ISO / Image</h3>
+            <form action="{{ url_for('storage.upload_iso') }}" method="POST" enctype="multipart/form-data">
+                <div style="margin-bottom: 15px; border: 2px dashed #ddd; padding: 20px; text-align: center; border-radius: 4px; background: #fdfdfd;">
+                    <input type="file" name="file" accept=".iso,.img,.qcow2" required style="width: 100%;">
+                    <div style="font-size: 0.8em; color: #888; margin-top: 5px;">
+                        Allowed: .iso, .img, .qcow2
+                    </div>
+                </div>
+                <button type="submit" style="width: 100%; background: #007bff;" onclick="this.innerHTML='Uploading... (Please Wait)';">
+                    Upload File
+                </button>
+            </form>
+        </div>
 
-            <div style="width: 100px;">
-                <label style="display: block; font-weight: bold; margin-bottom: 5px;">Format</label>
-                <select name="format" style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px; background: white;">
-                    <option value="qcow2">qcow2</option>
-                    <option value="raw">raw</option>
-                </select>
-            </div>
-
-            <button type="submit" style="background: #28a745; color: white; border: none; padding: 9px 20px; border-radius: 4px; cursor: pointer; font-weight: bold;">Create</button>
-        </form>
     </div>
 
     <!-- EXISTING FILES TABLE -->
@@ -57,13 +76,19 @@
                             <div style="font-size: 0.8em; color: #888;">{{ file.path }}</div>
                         </td>
                         <td style="padding: 15px;">
-                            <span style="background: #e9ecef; padding: 2px 8px; border-radius: 4px; font-size: 0.85em; text-transform: uppercase;">{{ file.type }}</span>
+                            {% if file.type == 'iso' %}
+                                <span style="background: #e2e3e5; color: #383d41; padding: 2px 8px; border-radius: 4px; font-size: 0.85em; font-weight: bold;">ISO</span>
+                            {% elif file.type == 'qcow2' %}
+                                <span style="background: #cce5ff; color: #004085; padding: 2px 8px; border-radius: 4px; font-size: 0.85em; font-weight: bold;">QCOW2</span>
+                            {% else %}
+                                <span style="background: #f8f9fa; border: 1px solid #ddd; padding: 2px 8px; border-radius: 4px; font-size: 0.85em;">{{ file.type|upper }}</span>
+                            {% endif %}
                         </td>
                         <td style="padding: 15px;">{{ file.size }}</td>
                         <td style="padding: 15px; text-align: right;">
                             <form action="{{ url_for('storage.delete_disk') }}" method="POST" style="display: inline;">
                                 <input type="hidden" name="filename" value="{{ file.name }}">
-                                <button type="submit" onclick="return confirm('PERMANENTLY DELETE {{ file.name }}? This cannot be undone.')" 
+                                <button type="submit" onclick="return confirm('PERMANENTLY DELETE {{ file.name }}?')" 
                                         style="background: transparent; border: 1px solid #dc3545; color: #dc3545; padding: 5px 10px; border-radius: 4px; cursor: pointer; font-size: 0.9em;">
                                     Delete
                                 </button>

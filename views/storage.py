@@ -5,9 +5,13 @@ from werkzeug.utils import secure_filename
 
 storage_bp = Blueprint('storage', __name__)
 
-# CONFIGURATION: The default path where KVM stores images
-# Ensure the user running this script has WRITE permissions to this folder.
+# CONFIGURATION
 STORAGE_PATH = '/var/lib/libvirt/images'
+ALLOWED_EXTENSIONS = {'iso', 'img', 'qcow2'}
+
+def allowed_file(filename):
+    return '.' in filename and \
+           filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
 def get_human_readable_size(size_in_bytes):
     for unit in ['B', 'KB', 'MB', 'GB', 'TB']:
@@ -19,31 +23,23 @@ def get_human_readable_size(size_in_bytes):
 @storage_bp.route('/storage')
 def list_storage():
     files = []
-    
     if not os.path.exists(STORAGE_PATH):
-        return f"Error: Storage path {STORAGE_PATH} does not exist. Please check configuration."
+        return f"Error: {STORAGE_PATH} not found."
 
     try:
-        # List all files in the directory
         for filename in os.listdir(STORAGE_PATH):
             full_path = os.path.join(STORAGE_PATH, filename)
-            
             if os.path.isfile(full_path):
-                # Get file stats
                 stats = os.stat(full_path)
-                size_str = get_human_readable_size(stats.st_size)
-                
-                # Determine type based on extension
                 ext = filename.split('.')[-1].lower() if '.' in filename else 'raw'
-                
                 files.append({
                     'name': filename,
                     'path': full_path,
-                    'size': size_str,
+                    'size': get_human_readable_size(stats.st_size),
                     'type': ext
                 })
     except Exception as e:
-        print(f"Error access storage: {e}")
+        print(f"Error: {e}")
 
     return render_template('storage.html', files=files, storage_path=STORAGE_PATH)
 
@@ -53,46 +49,57 @@ def create_disk():
     size_gb = request.form.get('size')
     fmt = request.form.get('format', 'qcow2')
     
-    if not name or not size_gb:
-        return "Missing Name or Size"
+    if not name or not size_gb: return "Missing Data"
 
-    # Sanitize filename to prevent directory traversal
     safe_name = secure_filename(name)
     if not safe_name.endswith(f'.{fmt}'):
         safe_name += f'.{fmt}'
-        
+    
     full_path = os.path.join(STORAGE_PATH, safe_name)
+    if os.path.exists(full_path): return "File Exists"
 
-    if os.path.exists(full_path):
-        return "File already exists!"
-
-    # Use qemu-img to create the disk
-    # Command: qemu-img create -f qcow2 /path/to/file.qcow2 20G
     try:
-        cmd = ['qemu-img', 'create', '-f', fmt, full_path, f'{size_gb}G']
-        subprocess.run(cmd, check=True)
-    except subprocess.CalledProcessError as e:
-        return f"Error creating disk: {e}"
-    except FileNotFoundError:
-        return "Error: 'qemu-img' not installed on server."
+        subprocess.run(['qemu-img', 'create', '-f', fmt, full_path, f'{size_gb}G'], check=True)
+    except Exception as e: return f"Error: {e}"
 
     return redirect(url_for('storage.list_storage'))
+
+@storage_bp.route('/storage/upload', methods=['POST'])
+def upload_iso():
+    # Check if the post request has the file part
+    if 'file' not in request.files:
+        return "No file part"
+        
+    file = request.files['file']
+    
+    # If user does not select file, browser also submits an empty part without filename
+    if file.filename == '':
+        return "No selected file"
+        
+    if file and allowed_file(file.filename):
+        filename = secure_filename(file.filename)
+        save_path = os.path.join(STORAGE_PATH, filename)
+        
+        # Determine chunk size (e.g., 4096 bytes) for writing large files efficiently
+        # Though Flask's save() method is usually sufficient
+        try:
+            file.save(save_path)
+        except Exception as e:
+            return f"Error saving file: {e}"
+            
+        return redirect(url_for('storage.list_storage'))
+    
+    return "Invalid file type. Only .iso, .img, .qcow2 allowed."
 
 @storage_bp.route('/storage/delete', methods=['POST'])
 def delete_disk():
     filename = request.form.get('filename')
+    if not filename: return "No filename"
     
-    if not filename:
-        return "No filename provided"
-        
-    # Security: Ensure we only delete files inside our STORAGE_PATH
     safe_name = secure_filename(os.path.basename(filename))
     full_path = os.path.join(STORAGE_PATH, safe_name)
     
     if os.path.exists(full_path):
-        try:
-            os.remove(full_path)
-        except Exception as e:
-            return f"Error deleting file: {e}"
+        os.remove(full_path)
     
     return redirect(url_for('storage.list_storage'))
