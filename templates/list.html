@@ -1,31 +1,62 @@
 {% extends 'base.html' %}
 
 {% block content %}
-    <div style="display: flex; justify-content: space-between; align-items: center;">
-        <h1>Current Virtual Machines</h1>
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+        <h1>Virtual Machines</h1>
         <a href="/create"><button style="background: #28a745;">+ New VM</button></a>
     </div>
 
     <table>
         <thead>
             <tr>
-                <th>ID</th>
                 <th>Name</th>
                 <th>State</th>
                 <th>Memory</th>
                 <th>vCPUs</th>
+                <th>Actions</th>
             </tr>
         </thead>
         <tbody>
             {% for vm in vms %}
             <tr>
-                <td>{{ vm.id if vm.id != -1 else '-' }}</td>
-                <td><strong>{{ vm.name }}</strong></td>
-                <td style="color: {{ 'green' if vm.state_code == 1 else 'red' }}">
-                    {{ vm.state }}
+                <td>
+                    <strong>{{ vm.name }}</strong><br>
+                    <small style="color:#888">{{ vm.uuid }}</small>
+                </td>
+                <td>
+                    {% if vm.state_code == 1 %}
+                        <span style="color:green; font-weight:bold;">● Running</span>
+                    {% elif vm.state_code == 5 %}
+                        <span style="color:red;">● Off</span>
+                    {% else %}
+                        <span>{{ vm.state }}</span>
+                    {% endif %}
                 </td>
                 <td>{{ vm.memory_mb }} MB</td>
                 <td>{{ vm.vcpus }}</td>
+                <td>
+                    <a href="{{ url_for('listing.view_vm', uuid=vm.uuid) }}">
+                        <button style="background:#17a2b8; padding:5px 10px; font-size:12px;">View</button>
+                    </a>
+                    
+                    <a href="{{ url_for('listing.edit_vm', uuid=vm.uuid) }}">
+                        <button style="background:#ffc107; color:black; padding:5px 10px; font-size:12px;">Edit</button>
+                    </a>
+
+                    {% if vm.state_code == 5 %}
+                        <a href="{{ url_for('listing.start_vm', uuid=vm.uuid) }}">
+                            <button style="background:#28a745; padding:5px 10px; font-size:12px;">Start</button>
+                        </a>
+                    {% else %}
+                        <a href="{{ url_for('listing.stop_vm', uuid=vm.uuid) }}" onclick="return confirm('Force Power Off?');">
+                            <button style="background:#dc3545; padding:5px 10px; font-size:12px;">Stop</button>
+                        </a>
+                    {% endif %}
+
+                    <a href="{{ url_for('listing.delete_vm', uuid=vm.uuid) }}" onclick="return confirm('Are you sure you want to delete this VM? This cannot be undone.');">
+                        <button style="background:#6c757d; padding:5px 10px; font-size:12px;">Delete</button>
+                    </a>
+                </td>
             </tr>
             {% else %}
             <tr><td colspan="5" style="text-align:center;">No VMs found.</td></tr>

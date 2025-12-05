@@ -1,0 +1,35 @@
+{% extends 'base.html' %}
+
+{% block content %}
+<div style="background: white; padding: 30px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
+    <a href="/list" style="text-decoration:none;">← Back to List</a>
+    
+    <h1 style="margin-top: 10px;">{{ vm.name }}</h1>
+    <hr>
+    
+    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px;">
+        <div>
+            <h3>Status</h3>
+            <p><strong>State:</strong> {{ vm.state }}</p>
+            <p><strong>OS Type:</strong> {{ vm.os_type }}</p>
+            <p><strong>UUID:</strong> {{ vm.uuid }}</p>
+        </div>
+        <div>
+            <h3>Resources</h3>
+            <p><strong>Memory:</strong> {{ vm.memory_mb }} MB</p>
+            <p><strong>vCPUs:</strong> {{ vm.vcpus }}</p>
+        </div>
+    </div>
+
+    <h3>Action Shortcuts</h3>
+    <div style="margin-top: 10px;">
+        <a href="{{ url_for('listing.start_vm', uuid=vm.uuid) }}"><button style="background: #28a745;">Start</button></a>
+        <a href="{{ url_for('listing.stop_vm', uuid=vm.uuid) }}"><button style="background: #dc3545;">Stop</button></a>
+    </div>
+
+    <h3>Raw Configuration (XML)</h3>
+    <textarea style="width: 100%; height: 200px; font-family: monospace; background: #f8f9fa; border: 1px solid #ddd;">
+        {{ vm.xml }}
+    </textarea>
+</div>
+{% endblock %}
