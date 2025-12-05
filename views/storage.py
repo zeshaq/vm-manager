@@ -96,4 +96,3 @@ def delete_disk():
             return f"Error deleting file: {e}"
     
     return redirect(url_for('storage.list_storage'))
-```json
