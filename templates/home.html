@@ -1,0 +1,11 @@
+{% extends 'base.html' %}
+
+{% block content %}
+    <h1>Welcome to VM Manager</h1>
+    <p>Manage your KVM hypervisor directly from the browser.</p>
+    
+    <div style="margin-top: 30px;">
+        <a href="/list"><button>View Virtual Machines</button></a>
+        <a href="/create"><button style="background-color: #28a745;">Create New VM</button></a>
+    </div>
+{% endblock %}

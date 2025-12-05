@@ -1,0 +1,35 @@
+{% extends 'base.html' %}
+
+{% block content %}
+    <div style="display: flex; justify-content: space-between; align-items: center;">
+        <h1>Current Virtual Machines</h1>
+        <a href="/create"><button style="background: #28a745;">+ New VM</button></a>
+    </div>
+
+    <table>
+        <thead>
+            <tr>
+                <th>ID</th>
+                <th>Name</th>
+                <th>State</th>
+                <th>Memory</th>
+                <th>vCPUs</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for vm in vms %}
+            <tr>
+                <td>{{ vm.id if vm.id != -1 else '-' }}</td>
+                <td><strong>{{ vm.name }}</strong></td>
+                <td style="color: {{ 'green' if vm.state_code == 1 else 'red' }}">
+                    {{ vm.state }}
+                </td>
+                <td>{{ vm.memory_mb }} MB</td>
+                <td>{{ vm.vcpus }}</td>
+            </tr>
+            {% else %}
+            <tr><td colspan="5" style="text-align:center;">No VMs found.</td></tr>
+            {% endfor %}
+        </tbody>
+    </table>
+{% endblock %}

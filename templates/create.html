@@ -1,0 +1,23 @@
+{% extends 'base.html' %}
+
+{% block content %}
+    <h1>Create New VM</h1>
+    <form method="POST" style="background: white; padding: 20px; border-radius: 8px;">
+        <label>Name:</label>
+        <input type="text" name="name" required placeholder="ubuntu-vm">
+        
+        <label>vCPUs:</label>
+        <input type="number" name="cpu" value="2" required>
+        
+        <label>RAM (MB):</label>
+        <input type="number" name="ram" value="2048" required>
+        
+        <label>Disk Image Path (.qcow2):</label>
+        <input type="text" name="disk_path" required placeholder="/var/lib/libvirt/images/vm.qcow2">
+        
+        <label>ISO Installer Path:</label>
+        <input type="text" name="iso_path" required placeholder="/var/lib/libvirt/images/ubuntu.iso">
+        
+        <button type="submit">Create VM</button>
+    </form>
+{% endblock %}
