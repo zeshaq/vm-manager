@@ -1,3 +1,4 @@
+===== /Users/ze/vm-manager/views/listing.py =====
 import libvirt
 import xml.etree.ElementTree as ET
 from flask import Blueprint, render_template, request, redirect, url_for, Response
@@ -46,8 +47,6 @@ def list_vms():
 
 # --- ACTIONS ---
 
-# Add this route to your views/listing.py file
-
 @listing_bp.route('/view/<uuid>')
 def view_vm(uuid):
     conn = get_db_connection()
@@ -56,21 +55,74 @@ def view_vm(uuid):
     if conn:
         try:
             dom = conn.lookupByUUIDString(uuid)
-            info = dom.info()
+            info = dom.info() # [state, maxmem, mem, vcpus, cputime]
             
-            # info structure: [state, maxmem, mem, vcpus, cputime]
-            state_str = get_vm_state_string(info[0])
+            # --- Network Interface Logic ---
+            xml_str = dom.XMLDesc(0)
+            tree = ET.fromstring(xml_str)
+            interfaces = []
+
+            # 1. Parse XML to get configuration (MAC, Model, Network Source)
+            for iface in tree.findall('devices/interface'):
+                iface_data = {
+                    'type': iface.get('type'),
+                    'mac': 'N/A',
+                    'network': 'N/A',
+                    'model': 'Default',
+                    'ips': []
+                }
+
+                # Get MAC
+                mac_node = iface.find('mac')
+                if mac_node is not None:
+                    iface_data['mac'] = mac_node.get('address')
+
+                # Get Source (e.g., network='default', bridge='br0', or dev='eth0')
+                source_node = iface.find('source')
+                if source_node is not None:
+                    iface_data['network'] = (
+                        source_node.get('network') or 
+                        source_node.get('bridge') or 
+                        source_node.get('dev') or "Unknown"
+                    )
+
+                # Get Model (e.g., virtio)
+                model_node = iface.find('model')
+                if model_node is not None:
+                    iface_data['model'] = model_node.get('type')
+
+                interfaces.append(iface_data)
+
+            # 2. Try to get IP addresses (Only works if VM is running)
+            if info[0] == libvirt.VIR_DOMAIN_RUNNING:
+                try:
+                    # Fetch IPs from DHCP leases or Guest Agent
+                    ifaces_info = dom.interfaceAddresses(libvirt.VIR_DOMAIN_INTERFACE_ADDRESSES_SRC_LEASE, 0)
+                    
+                    # Match IPs to the interfaces we found via XML based on MAC address
+                    for iface_name, val in ifaces_info.items():
+                        hwaddr = val.get('hwaddr')
+                        for known_iface in interfaces:
+                            if known_iface['mac'] == hwaddr:
+                                # Extract IP list
+                                known_iface['ips'] = [ip['addr'] for ip in val.get('addrs', [])]
+                except libvirt.libvirtError:
+                    # Likely means guest agent not running or no leases found yet
+                    pass
             
+            # --- End Network Logic ---
+
             vm_details = {
                 'uuid': dom.UUIDString(),
                 'name': dom.name(),
-                'state': state_str,
+                'state': get_vm_state_string(info[0]),
                 'state_code': info[0],
                 'memory_mb': int(info[1] / 1024),
                 'max_memory_mb': int(info[1] / 1024),
                 'vcpus': info[3],
                 'os_type': dom.OSType(),
-                'xml': dom.XMLDesc()  # The raw XML config
+                'interfaces': interfaces,
+                'xml': xml_str
             }
         except libvirt.libvirtError as e:
             return f"Error: {e}"
@@ -78,7 +130,6 @@ def view_vm(uuid):
             conn.close()
             
     return render_template('view.html', vm=vm_details)
-
 
 
 @listing_bp.route('/start/<uuid>')
@@ -151,7 +202,6 @@ def console_vm(uuid):
         return "<h1>VM Not Running</h1><p>Please start the VM before opening the console.</p><a href='/list'>Back</a>"
 
     # Detect the IP address the user is using to access this web app
-    # (This ensures it works whether you are on localhost or a remote PC)
     host_ip = request.host.split(':')[0]
 
     # Content of the .vv file
@@ -184,14 +234,11 @@ def edit_vm(uuid):
             new_ram_mb = int(request.form['ram'])
             new_ram_kib = new_ram_mb * 1024
 
-            # 2. Get the current XML configuration
-            # 1 = VIR_DOMAIN_XML_INACTIVE (Get the config that will be used on next boot)
+            # 2. Get the current XML configuration (INACTIVE definition)
             xml_str = dom.XMLDesc(libvirt.VIR_DOMAIN_XML_INACTIVE)
             tree = ET.fromstring(xml_str)
 
             # 3. Update Memory
-            # Note: Libvirt XML usually has <memory> (max) and <currentMemory>
-            # For simplicity, we set both to the same value
             mem_node = tree.find('memory')
             curr_mem_node = tree.find('currentMemory')
             
