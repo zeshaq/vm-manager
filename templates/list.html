@@ -19,10 +19,13 @@
         <tbody>
             {% for vm in vms %}
             <tr>
-                <td>
-                    <strong>{{ vm.name }}</strong><br>
-                    <small style="color:#888">{{ vm.uuid }}</small>
-                </td>
+<td>
+    <a href="{{ url_for('listing.view_vm', uuid=vm.uuid) }}" style="text-decoration: none; color: #007bff;">
+        <strong style="font-size: 1.1em;">{{ vm.name }}</strong>
+    </a>
+    <br>
+    <small style="color:#888">{{ vm.uuid }}</small>
+</td>
                 <td>
                     {% if vm.state_code == 1 %}
                         <span style="color:green; font-weight:bold;">● Running</span>

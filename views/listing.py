@@ -46,6 +46,41 @@ def list_vms():
 
 # --- ACTIONS ---
 
+# Add this route to your views/listing.py file
+
+@listing_bp.route('/view/<uuid>')
+def view_vm(uuid):
+    conn = get_db_connection()
+    vm_details = {}
+    
+    if conn:
+        try:
+            dom = conn.lookupByUUIDString(uuid)
+            info = dom.info()
+            
+            # info structure: [state, maxmem, mem, vcpus, cputime]
+            state_str = get_vm_state_string(info[0])
+            
+            vm_details = {
+                'uuid': dom.UUIDString(),
+                'name': dom.name(),
+                'state': state_str,
+                'state_code': info[0],
+                'memory_mb': int(info[1] / 1024),
+                'max_memory_mb': int(info[1] / 1024),
+                'vcpus': info[3],
+                'os_type': dom.OSType(),
+                'xml': dom.XMLDesc()  # The raw XML config
+            }
+        except libvirt.libvirtError as e:
+            return f"Error: {e}"
+        finally:
+            conn.close()
+            
+    return render_template('view.html', vm=vm_details)
+
+
+
 @listing_bp.route('/start/<uuid>')
 def start_vm(uuid):
     conn = get_db_connection()
