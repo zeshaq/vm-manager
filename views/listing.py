@@ -1,4 +1,3 @@
-===== /Users/ze/vm-manager/views/listing.py =====
 import libvirt
 import xml.etree.ElementTree as ET
 from flask import Blueprint, render_template, request, redirect, url_for, Response
