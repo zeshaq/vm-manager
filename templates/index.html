@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>KVM VM List</title>
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; padding: 40px; background-color: #f4f4f9; }
+        .container { max-width: 900px; margin: 0 auto; background: white; padding: 20px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); border-radius: 8px; }
+        h1 { margin-top: 0; color: #333; }
+        table { border-collapse: collapse; width: 100%; margin-top: 20px; }
+        th, td { border-bottom: 1px solid #eee; padding: 12px; text-align: left; }
+        th { background-color: #fafafa; color: #555; font-weight: 600; text-transform: uppercase; font-size: 0.85rem; }
+        tr:hover { background-color: #f1f1f1; }
+        
+        /* State Badges */
+        .badge { padding: 4px 8px; border-radius: 4px; font-size: 0.85rem; font-weight: bold; }
+        .status-1 { background-color: #d4edda; color: #155724; } /* Running */
+        .status-5 { background-color: #f8d7da; color: #721c24; } /* Shutoff */
+        .status-3 { background-color: #fff3cd; color: #856404; } /* Paused */
+        .status-unknown { background-color: #e2e3e5; color: #383d41; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Hypervisor VM List</h1>
+        <table>
+            <thead>
+                <tr>
+                    <th>ID</th>
+                    <th>Name</th>
+                    <th>State</th>
+                    <th>Memory</th>
+                    <th>vCPUs</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for vm in vms %}
+                <tr>
+                    <td>{{ vm.id if vm.id != -1 else '-' }}</td>
+                    <td><strong>{{ vm.name }}</strong></td>
+                    <td>
+                        <span class="badge status-{{ vm.state_code if vm.state_code in [1, 3, 5] else 'unknown' }}">
+                            {{ vm.state }}
+                        </span>
+                    </td>
+                    <td>{{ vm.memory_mb }} MB</td>
+                    <td>{{ vm.vcpus }}</td>
+                </tr>
+                {% else %}
+                <tr>
+                    <td colspan="5" style="text-align:center; color: #777;">No Virtual Machines found.</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</body>
+</html>
