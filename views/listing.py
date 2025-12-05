@@ -1,11 +1,11 @@
 import libvirt
 import xml.etree.ElementTree as ET
-from flask import Blueprint, render_template, request, redirect, url_for, flash
+from flask import Blueprint, render_template, request, redirect, url_for, Response
 
 listing_bp = Blueprint('listing', __name__)
 
 def get_db_connection():
-    # 'qemu:///system' gives Read/Write access (required for start/stop/delete)
+    # Connect to system hypervisor (Read/Write)
     return libvirt.open('qemu:///system')
 
 def get_vm_state_string(state_int):
@@ -52,7 +52,7 @@ def start_vm(uuid):
     if conn:
         try:
             dom = conn.lookupByUUIDString(uuid)
-            dom.create() # Boot the VM
+            dom.create()
         except libvirt.libvirtError as e:
             print(f"Error starting VM: {e}")
         finally:
@@ -65,10 +65,8 @@ def stop_vm(uuid):
     if conn:
         try:
             dom = conn.lookupByUUIDString(uuid)
-            # destroy() is hard power-off (like pulling the plug). 
-            # Use shutdown() for soft ACPI shutdown (might not work if OS hangs).
             if dom.isActive():
-                dom.destroy() 
+                dom.destroy() # Force power off
         except libvirt.libvirtError as e:
             print(f"Error stopping VM: {e}")
         finally:
@@ -81,10 +79,8 @@ def delete_vm(uuid):
     if conn:
         try:
             dom = conn.lookupByUUIDString(uuid)
-            # Stop it first if running
             if dom.isActive():
                 dom.destroy()
-            # Undefine removes the XML configuration
             dom.undefine()
         except libvirt.libvirtError as e:
             print(f"Error deleting VM: {e}")
@@ -92,73 +88,48 @@ def delete_vm(uuid):
             conn.close()
     return redirect(url_for('listing.list_vms'))
 
-@listing_bp.route('/view/<uuid>')
-def view_vm(uuid):
-    vm_details = {}
+# --- CONSOLE LOGIC ---
+
+@listing_bp.route('/console/<uuid>')
+def console_vm(uuid):
     conn = get_db_connection()
+    port = None
+    
     if conn:
         try:
             dom = conn.lookupByUUIDString(uuid)
-            info = dom.info()
-            vm_details = {
-                'uuid': dom.UUIDString(),
-                'name': dom.name(),
-                'state': get_vm_state_string(info[0]),
-                'memory_mb': int(info[1] / 1024),
-                'vcpus': info[3],
-                'os_type': dom.OSType(),
-                'xml': dom.XMLDesc() # Raw XML for debugging
-            }
-        finally:
-            conn.close()
-    return render_template('view.html', vm=vm_details)
-
-@listing_bp.route('/edit/<uuid>', methods=['GET', 'POST'])
-def edit_vm(uuid):
-    conn = get_db_connection()
-    if not conn:
-        return "Failed to connect to Hypervisor"
-
-    try:
-        dom = conn.lookupByUUIDString(uuid)
-        
-        if request.method == 'POST':
-            # 1. Parse existing XML
-            xml_str = dom.XMLDesc()
+            # Get XML description of the running domain to find the VNC port
+            xml_str = dom.XMLDesc(0)
             tree = ET.fromstring(xml_str)
             
-            # 2. Update values from Form
-            new_ram_kib = int(request.form['ram']) * 1024
-            new_cpu = request.form['cpu']
-            
-            # Find and update <memory> and <currentMemory>
-            for mem_tag in tree.findall('memory'):
-                mem_tag.text = str(new_ram_kib)
-            for mem_tag in tree.findall('currentMemory'):
-                mem_tag.text = str(new_ram_kib)
-                
-            # Find and update <vcpu>
-            vcpu_tag = tree.find('vcpu')
-            if vcpu_tag is not None:
-                vcpu_tag.text = str(new_cpu)
-            
-            # 3. Define the new XML (updates the persistent config)
-            new_xml = ET.tostring(tree).decode()
-            conn.defineXML(new_xml)
-            
-            return redirect(url_for('listing.list_vms'))
-        
-        # GET Request: Show form with current values
-        info = dom.info()
-        current_data = {
-            'uuid': uuid,
-            'name': dom.name(),
-            'ram': int(info[1] / 1024),
-            'cpu': info[3]
-        }
-        return render_template('edit.html', vm=current_data)
-        
-    except libvirt.libvirtError as e:
-        return f"Libvirt Error: {e}"
-    finally:
-        conn.close()
+            # Look for the VNC graphics node
+            graphics = tree.find("./devices/graphics[@type='vnc']")
+            if graphics is not None:
+                port = graphics.get('port')
+        except Exception as e:
+            print(f"Console Error: {e}")
+        finally:
+            conn.close()
+
+    # If VM is off or no VNC configured
+    if not port or port == '-1':
+        return "<h1>VM Not Running</h1><p>Please start the VM before opening the console.</p><a href='/list'>Back</a>"
+
+    # Detect the IP address the user is using to access this web app
+    # (This ensures it works whether you are on localhost or a remote PC)
+    host_ip = request.host.split(':')[0]
+
+    # Content of the .vv file
+    vv_content = f"""[virt-viewer]
+type=vnc
+host={host_ip}
+port={port}
+delete-this-file=1
+title=Console-{uuid}
+"""
+
+    return Response(
+        vv_content,
+        mimetype="application/x-virt-viewer",
+        headers={"Content-disposition": f"attachment; filename=console-{uuid}.vv"}
+    )

@@ -35,13 +35,13 @@
                 <td>{{ vm.memory_mb }} MB</td>
                 <td>{{ vm.vcpus }}</td>
                 <td>
-                    <a href="{{ url_for('listing.view_vm', uuid=vm.uuid) }}">
-                        <button style="background:#17a2b8; padding:5px 10px; font-size:12px;">View</button>
-                    </a>
-                    
-                    <a href="{{ url_for('listing.edit_vm', uuid=vm.uuid) }}">
-                        <button style="background:#ffc107; color:black; padding:5px 10px; font-size:12px;">Edit</button>
-                    </a>
+                    {% if vm.state_code == 1 %}
+                        <a href="{{ url_for('listing.console_vm', uuid=vm.uuid) }}">
+                            <button style="background:#343a40; padding:5px 10px; font-size:12px;">Console</button>
+                        </a>
+                    {% else %}
+                        <button style="background:#e9ecef; color:#adb5bd; padding:5px 10px; font-size:12px; cursor: not-allowed;" disabled>Console</button>
+                    {% endif %}
 
                     {% if vm.state_code == 5 %}
                         <a href="{{ url_for('listing.start_vm', uuid=vm.uuid) }}">
@@ -53,7 +53,7 @@
                         </a>
                     {% endif %}
 
-                    <a href="{{ url_for('listing.delete_vm', uuid=vm.uuid) }}" onclick="return confirm('Are you sure you want to delete this VM? This cannot be undone.');">
+                    <a href="{{ url_for('listing.delete_vm', uuid=vm.uuid) }}" onclick="return confirm('Delete this VM?');">
                         <button style="background:#6c757d; padding:5px 10px; font-size:12px;">Delete</button>
                     </a>
                 </td>
