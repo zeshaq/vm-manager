@@ -3,13 +3,21 @@ from flask import Blueprint, render_template, request, redirect, url_for
 
 creation_bp = Blueprint('creation', __name__)
 
-def generate_vm_xml(name, memory_mb, vcpus, disk_path, iso_path):
+def generate_vm_xml(name, memory_mb, vcpus, disk_path, iso_path, host_cpu=False):
     memory_kib = int(memory_mb) * 1024
+    
+    # CPU Model Configuration
+    # host-passthrough: Best performance, exposes host capabilities (AVX, nested virt) to VM
+    cpu_xml = ""
+    if host_cpu:
+        cpu_xml = "<cpu mode='host-passthrough' check='none'/>"
+        
     return f"""
     <domain type='kvm'>
       <name>{name}</name>
       <memory unit='KiB'>{memory_kib}</memory>
       <vcpu placement='static'>{vcpus}</vcpu>
+      {cpu_xml}
       <os>
         <type arch='x86_64' machine='pc-q35-6.2'>hvm</type>
         <boot dev='hd'/>
@@ -47,8 +55,11 @@ def create_vm():
             cpu = request.form['cpu']
             disk = request.form['disk_path']
             iso = request.form['iso_path']
+            
+            # Checkbox returns 'on' if checked, None if not
+            use_host_cpu = request.form.get('host_cpu') == 'on'
 
-            xml_config = generate_vm_xml(name, ram, cpu, disk, iso)
+            xml_config = generate_vm_xml(name, ram, cpu, disk, iso, use_host_cpu)
 
             conn = libvirt.open('qemu:///system')
             if conn:
