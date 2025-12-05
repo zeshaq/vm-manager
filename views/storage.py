@@ -27,7 +27,11 @@ def list_storage():
         return f"Error: {STORAGE_PATH} not found."
 
     try:
-        for filename in os.listdir(STORAGE_PATH):
+        # List all files and sort them alphabetically
+        dir_list = os.listdir(STORAGE_PATH)
+        dir_list.sort()  # <--- Added sorting here
+
+        for filename in dir_list:
             full_path = os.path.join(STORAGE_PATH, filename)
             if os.path.isfile(full_path):
                 stats = os.stat(full_path)
@@ -66,13 +70,10 @@ def create_disk():
 
 @storage_bp.route('/storage/upload', methods=['POST'])
 def upload_iso():
-    # Check if the post request has the file part
     if 'file' not in request.files:
         return "No file part"
         
     file = request.files['file']
-    
-    # If user does not select file, browser also submits an empty part without filename
     if file.filename == '':
         return "No selected file"
         
@@ -80,8 +81,6 @@ def upload_iso():
         filename = secure_filename(file.filename)
         save_path = os.path.join(STORAGE_PATH, filename)
         
-        # Determine chunk size (e.g., 4096 bytes) for writing large files efficiently
-        # Though Flask's save() method is usually sufficient
         try:
             file.save(save_path)
         except Exception as e:

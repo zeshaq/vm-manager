@@ -5,6 +5,7 @@ from flask import Blueprint, render_template, request, redirect, url_for, Respon
 listing_bp = Blueprint('listing', __name__)
 
 def get_db_connection():
+    # Connect to system hypervisor
     return libvirt.open('qemu:///system')
 
 def get_vm_state_string(state_int):
@@ -37,11 +38,17 @@ def list_vms():
                     'memory_mb': int(info[1] / 1024),
                     'vcpus': info[3]
                 })
+            
+            # SORT LIST ALPHABETICALLY BY NAME
+            vms_list.sort(key=lambda x: x['name'])
+
         except libvirt.libvirtError as e:
             print(f"Error: {e}")
         finally:
             conn.close()
     return render_template('list.html', vms=vms_list)
+
+# --- VIEW & PARSING LOGIC ---
 
 @listing_bp.route('/view/<uuid>')
 def view_vm(uuid):
@@ -154,7 +161,7 @@ def view_vm(uuid):
             
     return render_template('view.html', vm=vm_details)
 
-# --- STORAGE MANAGEMENT (UPDATED) ---
+# --- STORAGE MANAGEMENT ---
 
 @listing_bp.route('/disk/add/<uuid>', methods=['POST'])
 def add_disk(uuid):
@@ -165,12 +172,10 @@ def add_disk(uuid):
             file_path = request.form['file_path']
             target_dev = request.form['target_dev']
             
-            # 1. AUTO-DETECT ISO vs DISK
+            # AUTO-DETECT ISO vs DISK
             is_iso = file_path.lower().endswith('.iso')
             
             if is_iso:
-                # Configuration for CDROM/ISO
-                # Use raw driver, sata bus, and readonly tag
                 xml = f"""
                 <disk type='file' device='cdrom'>
                   <driver name='qemu' type='raw'/>
@@ -180,8 +185,6 @@ def add_disk(uuid):
                 </disk>
                 """
             else:
-                # Configuration for Standard Disk (qcow2)
-                # Use qcow2 driver, virtio bus
                 xml = f"""
                 <disk type='file' device='disk'>
                   <driver name='qemu' type='qcow2'/>
