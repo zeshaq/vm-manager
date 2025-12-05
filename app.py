@@ -1,13 +1,16 @@
 from flask import Flask
-# Import the blueprints from the views folder
+# Import the blueprints
 from views.listing import listing_bp
 from views.creation import creation_bp
+from views.storage import storage_bp  # <--- Import new blueprint
 
 app = Flask(__name__)
+app.secret_key = 'some_secret_key' # Required for flash messages if used
 
 # Register the blueprints
 app.register_blueprint(listing_bp)
 app.register_blueprint(creation_bp)
+app.register_blueprint(storage_bp)    # <--- Register new blueprint
 
 # Simple route for the root URL
 @app.route('/')

@@ -4,25 +4,31 @@
     <meta charset="UTF-8">
     <title>VM Manager</title>
     <style>
-        body { font-family: sans-serif; margin: 0; padding: 0; background: #f4f4f9; }
-        header { background: #333; padding: 15px; }
-        header a { color: white; text-decoration: none; margin-right: 20px; font-weight: bold; }
-        header a:hover { text-decoration: underline; }
-        .container { padding: 40px; max-width: 900px; margin: 0 auto; }
+        body { font-family: sans-serif; margin: 0; padding: 0; background: #f4f4f9; color: #333; }
+        header { background: #333; padding: 15px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        header a { color: #ddd; text-decoration: none; margin-right: 20px; font-weight: bold; transition: color 0.2s; }
+        header a:hover { color: white; text-decoration: none; }
+        .container { padding: 40px; max-width: 1000px; margin: 0 auto; }
+        
         /* Common table styles */
         table { width: 100%; border-collapse: collapse; background: white; margin-top: 20px; }
         th, td { padding: 12px; border: 1px solid #ddd; text-align: left; }
         th { background: #f2f2f2; }
+        
         /* Common form styles */
-        input { width: 100%; padding: 8px; margin: 8px 0; box-sizing: border-box; }
-        button { padding: 10px 15px; background: #007bff; color: white; border: none; cursor: pointer; }
+        input, select { width: 100%; padding: 8px; margin: 8px 0; box-sizing: border-box; }
+        button { padding: 10px 15px; background: #007bff; color: white; border: none; cursor: pointer; border-radius: 4px; }
+        button:hover { opacity: 0.9; }
     </style>
 </head>
 <body>
     <header>
-        <a href="/">Home</a>
-        <a href="/list">List VMs</a>
-        <a href="/create">Create VM</a>
+        <div style="max-width: 1000px; margin: 0 auto; display: flex; align-items: center;">
+            <a href="/" style="font-size: 1.2em; color: white; margin-right: 40px;">VM Manager</a>
+            <a href="/list">List VMs</a>
+            <a href="/create">Create VM</a>
+            <a href="/storage">Storage</a> <!-- NEW LINK -->
+        </div>
     </header>
     
     <div class="container">
