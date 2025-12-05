@@ -1,66 +1,38 @@
 {% extends 'base.html' %}
 
 {% block content %}
-<div style="background: white; padding: 30px; border-radius: 8px; box-shadow: 0 2px 5px rgba(0,0,0,0.1);">
-    
-    <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 2px solid #eee; padding-bottom: 20px; margin-bottom: 20px;">
-        <div>
-            <a href="/list" style="text-decoration: none; color: #666;">← Back to List</a>
-            <h1 style="margin: 10px 0 5px 0;">{{ vm.name }}</h1>
-            <span style="background: #eee; padding: 2px 8px; border-radius: 4px; font-size: 0.8em; color: #555;">{{ vm.uuid }}</span>
-        </div>
-        
-        <div>
-            {% if vm.state_code == 1 %}
-                <span style="background: #d4edda; color: #155724; padding: 10px 20px; border-radius: 20px; font-weight: bold;">Running</span>
-            {% else %}
-                <span style="background: #f8d7da; color: #721c24; padding: 10px 20px; border-radius: 20px; font-weight: bold;">{{ vm.state }}</span>
-            {% endif %}
-        </div>
-    </div>
-
-    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 30px; margin-bottom: 30px;">
+<div style="display: grid; grid-template-columns: 1fr 1fr; gap: 30px; margin-bottom: 30px;">
         <div>
             <h3 style="color: #444;">Resources</h3>
-            <table style="width: 100%; border: none;">
+            <table style="width: 100%; border: none; margin-bottom: 20px;">
                 <tr><td style="padding: 8px 0; border-bottom: 1px solid #eee;"><strong>vCPUs:</strong></td><td style="border-bottom: 1px solid #eee;">{{ vm.vcpus }}</td></tr>
                 <tr><td style="padding: 8px 0; border-bottom: 1px solid #eee;"><strong>Memory:</strong></td><td style="border-bottom: 1px solid #eee;">{{ vm.memory_mb }} MB</td></tr>
                 <tr><td style="padding: 8px 0; border-bottom: 1px solid #eee;"><strong>Max Memory:</strong></td><td style="border-bottom: 1px solid #eee;">{{ vm.max_memory_mb }} MB</td></tr>
             </table>
-        </div>
-        <div>
+
             <h3 style="color: #444;">System</h3>
             <table style="width: 100%; border: none;">
                 <tr><td style="padding: 8px 0; border-bottom: 1px solid #eee;"><strong>OS Type:</strong></td><td style="border-bottom: 1px solid #eee;">{{ vm.os_type }}</td></tr>
                 <tr><td style="padding: 8px 0; border-bottom: 1px solid #eee;"><strong>Hypervisor:</strong></td><td style="border-bottom: 1px solid #eee;">KVM / QEMU</td></tr>
             </table>
         </div>
+
+        <div>
+            <h3 style="color: #444;">Network Interfaces</h3>
+            {% if vm.interfaces %}
+                {% for iface in vm.interfaces %}
+                <div style="border: 1px solid #ddd; border-radius: 5px; padding: 15px; margin-bottom: 10px; background: #fafafa;">
+                    <div style="margin-bottom: 5px;">
+                        <span style="font-weight: bold; color: #007bff;">{{ iface.source }}</span> 
+                        <span style="font-size: 0.8em; background: #eee; padding: 2px 6px; border-radius: 4px; color: #666; margin-left: 5px;">{{ iface.type }}</span>
+                    </div>
+                    <div style="font-family: monospace; color: #333; font-size: 1.1em;">{{ iface.mac }}</div>
+                    <div style="font-size: 0.9em; color: #888; margin-top: 5px;">Model: {{ iface.model }}</div>
+                </div>
+                {% endfor %}
+            {% else %}
+                <p style="color: #888; font-style: italic;">No network interfaces found.</p>
+            {% endif %}
+        </div>
     </div>
-
-    <div style="background: #f8f9fa; padding: 20px; border-radius: 8px;">
-        <h3 style="margin-top: 0;">Actions</h3>
-        
-        {% if vm.state_code == 1 %}
-            <a href="{{ url_for('listing.console_vm', uuid=vm.uuid) }}">
-                <button style="background: #343a40; color: white; padding: 10px 20px; border: none; border-radius: 5px; cursor: pointer; margin-right: 10px;">Open Console</button>
-            </a>
-            <a href="{{ url_for('listing.stop_vm', uuid=vm.uuid) }}" onclick="return confirm('Force Stop?');">
-                <button style="background: #dc3545; color: white; padding: 10px 20px; border: none; border-radius: 5px; cursor: pointer;">Stop VM</button>
-            </a>
-        {% else %}
-            <a href="{{ url_for('listing.start_vm', uuid=vm.uuid) }}">
-                <button style="background: #28a745; color: white; padding: 10px 20px; border: none; border-radius: 5px; cursor: pointer;">Start VM</button>
-            </a>
-        {% endif %}
-        
-        <a href="{{ url_for('listing.delete_vm', uuid=vm.uuid) }}" onclick="return confirm('Are you sure? This cannot be undone.');" style="float: right;">
-            <button style="background: #6c757d; color: white; padding: 10px 20px; border: none; border-radius: 5px; cursor: pointer;">Delete VM</button>
-        </a>
-
-        <a href="{{ url_for('listing.edit_vm', uuid=vm.uuid) }}">
-    <button style="background: #ffc107; color: #212529; padding: 10px 20px; border: none; border-radius: 5px; cursor: pointer; margin-right: 10px;">Edit Resources</button>
-</a>
-    </div>
-
-</div>
 {% endblock %}
