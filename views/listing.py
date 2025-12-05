@@ -48,6 +48,37 @@ def list_vms():
 
 # Add this route to your views/listing.py file
 
+@listing_bp.route('/view/<uuid>')
+def view_vm(uuid):
+    conn = get_db_connection()
+    vm_details = {}
+    
+    if conn:
+        try:
+            dom = conn.lookupByUUIDString(uuid)
+            info = dom.info()
+            
+            # info structure: [state, maxmem, mem, vcpus, cputime]
+            state_str = get_vm_state_string(info[0])
+            
+            vm_details = {
+                'uuid': dom.UUIDString(),
+                'name': dom.name(),
+                'state': state_str,
+                'state_code': info[0],
+                'memory_mb': int(info[1] / 1024),
+                'max_memory_mb': int(info[1] / 1024),
+                'vcpus': info[3],
+                'os_type': dom.OSType(),
+                'xml': dom.XMLDesc()  # The raw XML config
+            }
+        except libvirt.libvirtError as e:
+            return f"Error: {e}"
+        finally:
+            conn.close()
+            
+    return render_template('view.html', vm=vm_details)
+
 
 
 @listing_bp.route('/start/<uuid>')
@@ -140,7 +171,6 @@ title=Console-{uuid}
 
 @listing_bp.route('/edit/<uuid>', methods=['GET', 'POST'])
 def edit_vm(uuid):
-
     conn = get_db_connection()
     if not conn:
         return "Could not connect to Hypervisor"
@@ -199,67 +229,3 @@ def edit_vm(uuid):
     except libvirt.libvirtError as e:
         if conn: conn.close()
         return f"Error editing VM: {e}"
-    
-
-@listing_bp.route('/view/<uuid>')
-def view_vm(uuid):
-    conn = get_db_connection()
-    vm_details = {}
-    
-    if conn:
-        try:
-            dom = conn.lookupByUUIDString(uuid)
-            info = dom.info()
-            
-            # --- NEW: Parse XML for Network Interfaces ---
-            xml_str = dom.XMLDesc(0)
-            tree = ET.fromstring(xml_str)
-            interfaces = []
-
-            for iface in tree.findall("./devices/interface"):
-                iface_type = iface.get('type')
-                
-                # Get MAC Address
-                mac_node = iface.find('mac')
-                mac_addr = mac_node.get('address') if mac_node is not None else "N/A"
-                
-                # Get Source (Network name or Bridge name)
-                source_node = iface.find('source')
-                source_name = "Unknown"
-                if source_node is not None:
-                    if iface_type == 'network':
-                        source_name = source_node.get('network') # e.g., 'default'
-                    elif iface_type == 'bridge':
-                        source_name = source_node.get('bridge')  # e.g., 'br0'
-
-                # Get Model (e.g., virtio, e1000)
-                model_node = iface.find('model')
-                model_type = model_node.get('type') if model_node is not None else "default"
-
-                interfaces.append({
-                    'type': iface_type,
-                    'mac': mac_addr,
-                    'source': source_name,
-                    'model': model_type
-                })
-            # ---------------------------------------------
-
-            state_str = get_vm_state_string(info[0])
-            
-            vm_details = {
-                'uuid': dom.UUIDString(),
-                'name': dom.name(),
-                'state': state_str,
-                'state_code': info[0],
-                'memory_mb': int(info[1] / 1024),
-                'max_memory_mb': int(info[1] / 1024),
-                'vcpus': info[3],
-                'os_type': dom.OSType(),
-                'interfaces': interfaces # Add the list to the context
-            }
-        except libvirt.libvirtError as e:
-            return f"Error: {e}"
-        finally:
-            conn.close()
-            
-    return render_template('view.html', vm=vm_details)
