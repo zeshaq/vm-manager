@@ -34,7 +34,32 @@
         <!-- Boot Config -->
         <div>
             <h3 style="color: #444;">Boot Configuration</h3>
-            <div style="background: #f9f9f9; padding: 15px; border-radius: 4px;">
+            
+            <!-- NEW: Current Boot Order Display Block -->
+            <div style="background: #f1f8ff; border: 1px solid #cce5ff; padding: 15px; border-radius: 4px; margin-bottom: 15px;">
+                <strong style="color: #004085; display: block; margin-bottom: 5px; font-size: 0.9em;">CURRENT BOOT PRIORITY:</strong>
+                <ol style="margin: 0; padding-left: 20px; font-size: 0.95em; color: #333;">
+                    <!-- 1st Device -->
+                    <li style="margin-bottom: 2px;">
+                        {% if vm.current_boot['1'] == 'network' %} Network (PXE)
+                        {% elif vm.current_boot['1'] and 'disk|' in vm.current_boot['1'] %} Disk ({{ vm.current_boot['1'].split('|')[1] }})
+                        {% elif vm.current_boot['1'] == 'hd_generic' %} Hard Disk (Generic)
+                        {% elif vm.current_boot['1'] == 'cdrom_generic' %} CD-ROM (Generic)
+                        {% else %} Not Set {% endif %}
+                    </li>
+                    <!-- 2nd Device -->
+                    <li>
+                        {% if vm.current_boot['2'] == 'network' %} Network (PXE)
+                        {% elif vm.current_boot['2'] and 'disk|' in vm.current_boot['2'] %} Disk ({{ vm.current_boot['2'].split('|')[1] }})
+                        {% elif vm.current_boot['2'] == 'hd_generic' %} Hard Disk (Generic)
+                        {% elif vm.current_boot['2'] == 'cdrom_generic' %} CD-ROM (Generic)
+                        {% else %} <em>None</em> {% endif %}
+                    </li>
+                </ol>
+            </div>
+
+            <!-- Edit Form -->
+            <div style="background: #f9f9f9; padding: 15px; border-radius: 4px; border: 1px solid #eee;">
                 <form action="{{ url_for('listing.update_boot_order', uuid=vm.uuid) }}" method="POST">
                     
                     <!-- Boot 1 -->
@@ -153,7 +178,7 @@
             </tbody>
         </table>
         
-        <!-- UPDATED ADD INTERFACE FORM -->
+        <!-- ADD INTERFACE FORM -->
         <form action="{{ url_for('listing.add_interface', uuid=vm.uuid) }}" method="POST" style="background:#f1f1f1; padding:15px; margin-top:15px; border-radius:5px; display:flex; align-items:center; gap:10px;">
             <strong style="color:#555; font-size:0.9em;">Add Net:</strong>
             
