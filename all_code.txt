@@ -1,0 +1,499 @@
+===== /Users/ze/vm-manager/app.py =====
+from flask import Flask
+# Import the blueprints from the views folder
+from views.listing import listing_bp
+from views.creation import creation_bp
+
+app = Flask(__name__)
+
+# Register the blueprints
+app.register_blueprint(listing_bp)
+app.register_blueprint(creation_bp)
+
+# Simple route for the root URL
+@app.route('/')
+def index():
+    from flask import render_template
+    return render_template('home.html')
+
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=5000, debug=True)
+
+
+===== /Users/ze/vm-manager/templates/home.html =====
+{% extends 'base.html' %}
+
+{% block content %}
+    <h1>Welcome to VM Manager</h1>
+    <p>Manage your KVM hypervisor directly from the browser.</p>
+    
+    <div style="margin-top: 30px;">
+        <a href="/list"><button>View Virtual Machines</button></a>
+        <a href="/create"><button style="background-color: #28a745;">Create New VM</button></a>
+    </div>
+{% endblock %}
+
+
+===== /Users/ze/vm-manager/templates/base.html =====
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>VM Manager</title>
+    <style>
+        body { font-family: sans-serif; margin: 0; padding: 0; background: #f4f4f9; }
+        header { background: #333; padding: 15px; }
+        header a { color: white; text-decoration: none; margin-right: 20px; font-weight: bold; }
+        header a:hover { text-decoration: underline; }
+        .container { padding: 40px; max-width: 900px; margin: 0 auto; }
+        /* Common table styles */
+        table { width: 100%; border-collapse: collapse; background: white; margin-top: 20px; }
+        th, td { padding: 12px; border: 1px solid #ddd; text-align: left; }
+        th { background: #f2f2f2; }
+        /* Common form styles */
+        input { width: 100%; padding: 8px; margin: 8px 0; box-sizing: border-box; }
+        button { padding: 10px 15px; background: #007bff; color: white; border: none; cursor: pointer; }
+    </style>
+</head>
+<body>
+    <header>
+        <a href="/">Home</a>
+        <a href="/list">List VMs</a>
+        <a href="/create">Create VM</a>
+    </header>
+    
+    <div class="container">
+        {% block content %}{% endblock %}
+    </div>
+</body>
+</html>
+
+
+===== /Users/ze/vm-manager/templates/list.html =====
+{% extends 'base.html' %}
+
+{% block content %}
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+        <h1>Virtual Machines</h1>
+        <a href="/create"><button style="background: #28a745;">+ New VM</button></a>
+    </div>
+
+    <table>
+        <thead>
+            <tr>
+                <th>Name</th>
+                <th>State</th>
+                <th>Memory</th>
+                <th>vCPUs</th>
+                <th>Actions</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for vm in vms %}
+            <tr>
+<td>
+    <a href="{{ url_for('listing.view_vm', uuid=vm.uuid) }}" style="text-decoration: none; color: #007bff;">
+        <strong style="font-size: 1.1em;">{{ vm.name }}</strong>
+    </a>
+    <br>
+    <small style="color:#888">{{ vm.uuid }}</small>
+</td>
+                <td>
+                    {% if vm.state_code == 1 %}
+                        <span style="color:green; font-weight:bold;">● Running</span>
+                    {% elif vm.state_code == 5 %}
+                        <span style="color:red;">● Off</span>
+                    {% else %}
+                        <span>{{ vm.state }}</span>
+                    {% endif %}
+                </td>
+                <td>{{ vm.memory_mb }} MB</td>
+                <td>{{ vm.vcpus }}</td>
+                <td>
+                    {% if vm.state_code == 1 %}
+                        <a href="{{ url_for('listing.console_vm', uuid=vm.uuid) }}">
+                            <button style="background:#343a40; padding:5px 10px; font-size:12px;">Console</button>
+                        </a>
+                    {% else %}
+                        <button style="background:#e9ecef; color:#adb5bd; padding:5px 10px; font-size:12px; cursor: not-allowed;" disabled>Console</button>
+                    {% endif %}
+
+                    {% if vm.state_code == 5 %}
+                        <a href="{{ url_for('listing.start_vm', uuid=vm.uuid) }}">
+                            <button style="background:#28a745; padding:5px 10px; font-size:12px;">Start</button>
+                        </a>
+                    {% else %}
+                        <a href="{{ url_for('listing.stop_vm', uuid=vm.uuid) }}" onclick="return confirm('Force Power Off?');">
+                            <button style="background:#dc3545; padding:5px 10px; font-size:12px;">Stop</button>
+                        </a>
+                    {% endif %}
+
+                    <a href="{{ url_for('listing.delete_vm', uuid=vm.uuid) }}" onclick="return confirm('Delete this VM?');">
+                        <button style="background:#6c757d; padding:5px 10px; font-size:12px;">Delete</button>
+                    </a>
+                </td>
+            </tr>
+            {% else %}
+            <tr><td colspan="5" style="text-align:center;">No VMs found.</td></tr>
+            {% endfor %}
+        </tbody>
+    </table>
+{% endblock %}
+
+
+===== /Users/ze/vm-manager/templates/create.html =====
+{% extends 'base.html' %}
+
+{% block content %}
+    <h1>Create New VM</h1>
+    <form method="POST" style="background: white; padding: 20px; border-radius: 8px;">
+        <label>Name:</label>
+        <input type="text" name="name" required placeholder="ubuntu-vm">
+        
+        <label>vCPUs:</label>
+        <input type="number" name="cpu" value="2" required>
+        
+        <label>RAM (MB):</label>
+        <input type="number" name="ram" value="2048" required>
+        
+        <label>Disk Image Path (.qcow2):</label>
+        <input type="text" name="disk_path" required placeholder="/var/lib/libvirt/images/vm.qcow2">
+        
+        <label>ISO Installer Path:</label>
+        <input type="text" name="iso_path" required placeholder="/var/lib/libvirt/images/ubuntu.iso">
+        
+        <button type="submit">Create VM</button>
+    </form>
+{% endblock %}
+
+
+===== /Users/ze/vm-manager/templates/edit.html =====
+{% extends 'base.html' %}
+
+{% block content %}
+<div style="max-width: 500px; margin: 0 auto; background: white; padding: 30px; border-radius: 8px;">
+    <h2>Edit VM: {{ vm.name }}</h2>
+    <div style="background: #fff3cd; padding: 10px; margin-bottom: 20px; border: 1px solid #ffeeba; color: #856404; font-size: 0.9em;">
+        <strong>Note:</strong> Changes will only take effect after the VM is fully restarted (Stopped and Started).
+    </div>
+    
+    <form method="POST">
+        <label>vCPUs:</label>
+        <input type="number" name="cpu" value="{{ vm.cpu }}" min="1" max="16" required>
+        
+        <label>Memory (MB):</label>
+        <input type="number" name="ram" value="{{ vm.ram }}" min="512" step="512" required>
+        
+        <div style="margin-top: 20px;">
+            <button type="submit" style="background: #28a745; width: 100%;">Save Changes</button>
+        </div>
+    </form>
+    <br>
+    <a href="/list" style="display:block; text-align:center; color:#666; text-decoration:none;">Cancel</a>
+</div>
+{% endblock %}
+
+
+===== /Users/ze/vm-manager/templates/view.html =====
+{% extends 'base.html' %}
+
+{% block content %}
+<div style="background: white; padding: 30px; border-radius: 8px; box-shadow: 0 2px 5px rgba(0,0,0,0.1);">
+    
+    <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 2px solid #eee; padding-bottom: 20px; margin-bottom: 20px;">
+        <div>
+            <a href="/list" style="text-decoration: none; color: #666;">← Back to List</a>
+            <h1 style="margin: 10px 0 5px 0;">{{ vm.name }}</h1>
+            <span style="background: #eee; padding: 2px 8px; border-radius: 4px; font-size: 0.8em; color: #555;">{{ vm.uuid }}</span>
+        </div>
+        
+        <div>
+            {% if vm.state_code == 1 %}
+                <span style="background: #d4edda; color: #155724; padding: 10px 20px; border-radius: 20px; font-weight: bold;">Running</span>
+            {% else %}
+                <span style="background: #f8d7da; color: #721c24; padding: 10px 20px; border-radius: 20px; font-weight: bold;">{{ vm.state }}</span>
+            {% endif %}
+        </div>
+    </div>
+
+    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 30px; margin-bottom: 30px;">
+        <div>
+            <h3 style="color: #444;">Resources</h3>
+            <table style="width: 100%; border: none;">
+                <tr><td style="padding: 8px 0; border-bottom: 1px solid #eee;"><strong>vCPUs:</strong></td><td style="border-bottom: 1px solid #eee;">{{ vm.vcpus }}</td></tr>
+                <tr><td style="padding: 8px 0; border-bottom: 1px solid #eee;"><strong>Memory:</strong></td><td style="border-bottom: 1px solid #eee;">{{ vm.memory_mb }} MB</td></tr>
+                <tr><td style="padding: 8px 0; border-bottom: 1px solid #eee;"><strong>Max Memory:</strong></td><td style="border-bottom: 1px solid #eee;">{{ vm.max_memory_mb }} MB</td></tr>
+            </table>
+        </div>
+        <div>
+            <h3 style="color: #444;">System</h3>
+            <table style="width: 100%; border: none;">
+                <tr><td style="padding: 8px 0; border-bottom: 1px solid #eee;"><strong>OS Type:</strong></td><td style="border-bottom: 1px solid #eee;">{{ vm.os_type }}</td></tr>
+                <tr><td style="padding: 8px 0; border-bottom: 1px solid #eee;"><strong>Hypervisor:</strong></td><td style="border-bottom: 1px solid #eee;">KVM / QEMU</td></tr>
+            </table>
+        </div>
+    </div>
+
+    <div style="background: #f8f9fa; padding: 20px; border-radius: 8px;">
+        <h3 style="margin-top: 0;">Actions</h3>
+        
+        {% if vm.state_code == 1 %}
+            <a href="{{ url_for('listing.console_vm', uuid=vm.uuid) }}">
+                <button style="background: #343a40; color: white; padding: 10px 20px; border: none; border-radius: 5px; cursor: pointer; margin-right: 10px;">Open Console</button>
+            </a>
+            <a href="{{ url_for('listing.stop_vm', uuid=vm.uuid) }}" onclick="return confirm('Force Stop?');">
+                <button style="background: #dc3545; color: white; padding: 10px 20px; border: none; border-radius: 5px; cursor: pointer;">Stop VM</button>
+            </a>
+        {% else %}
+            <a href="{{ url_for('listing.start_vm', uuid=vm.uuid) }}">
+                <button style="background: #28a745; color: white; padding: 10px 20px; border: none; border-radius: 5px; cursor: pointer;">Start VM</button>
+            </a>
+        {% endif %}
+        
+        <a href="{{ url_for('listing.delete_vm', uuid=vm.uuid) }}" onclick="return confirm('Are you sure? This cannot be undone.');" style="float: right;">
+            <button style="background: #6c757d; color: white; padding: 10px 20px; border: none; border-radius: 5px; cursor: pointer;">Delete VM</button>
+        </a>
+    </div>
+
+</div>
+{% endblock %}
+
+
+===== /Users/ze/vm-manager/views/creation.py =====
+import libvirt
+from flask import Blueprint, render_template, request, redirect, url_for
+
+creation_bp = Blueprint('creation', __name__)
+
+def generate_vm_xml(name, memory_mb, vcpus, disk_path, iso_path):
+    memory_kib = int(memory_mb) * 1024
+    return f"""
+    <domain type='kvm'>
+      <name>{name}</name>
+      <memory unit='KiB'>{memory_kib}</memory>
+      <vcpu placement='static'>{vcpus}</vcpu>
+      <os>
+        <type arch='x86_64' machine='pc-q35-6.2'>hvm</type>
+        <boot dev='hd'/>
+        <boot dev='cdrom'/>
+      </os>
+      <features><acpi/><apic/></features>
+      <devices>
+        <emulator>/usr/bin/qemu-system-x86_64</emulator>
+        <disk type='file' device='disk'>
+          <driver name='qemu' type='qcow2'/>
+          <source file='{disk_path}'/>
+          <target dev='vda' bus='virtio'/>
+        </disk>
+        <disk type='file' device='cdrom'>
+          <driver name='qemu' type='raw'/>
+          <source file='{iso_path}'/>
+          <target dev='sda' bus='sata'/>
+          <readonly/>
+        </disk>
+        <interface type='network'>
+          <source network='default'/>
+          <model type='virtio'/>
+        </interface>
+        <graphics type='vnc' port='-1' autoport='yes' listen='0.0.0.0'/>
+      </devices>
+    </domain>
+    """
+
+@creation_bp.route('/create', methods=['GET', 'POST'])
+def create_vm():
+    if request.method == 'POST':
+        try:
+            name = request.form['name']
+            ram = request.form['ram']
+            cpu = request.form['cpu']
+            disk = request.form['disk_path']
+            iso = request.form['iso_path']
+
+            xml_config = generate_vm_xml(name, ram, cpu, disk, iso)
+
+            conn = libvirt.open('qemu:///system')
+            if conn:
+                conn.defineXML(xml_config)
+                conn.close()
+                return redirect(url_for('listing.list_vms'))
+                
+        except libvirt.libvirtError as e:
+            return f"<h1>Error Creating VM</h1><p>{e}</p><a href='/create'>Try Again</a>"
+
+    return render_template('create.html')
+
+
+===== /Users/ze/vm-manager/views/listing.py =====
+import libvirt
+import xml.etree.ElementTree as ET
+from flask import Blueprint, render_template, request, redirect, url_for, Response
+
+listing_bp = Blueprint('listing', __name__)
+
+def get_db_connection():
+    # Connect to system hypervisor (Read/Write)
+    return libvirt.open('qemu:///system')
+
+def get_vm_state_string(state_int):
+    states = {
+        libvirt.VIR_DOMAIN_NOSTATE: "No State",
+        libvirt.VIR_DOMAIN_RUNNING: "Running",
+        libvirt.VIR_DOMAIN_BLOCKED: "Blocked",
+        libvirt.VIR_DOMAIN_PAUSED: "Paused",
+        libvirt.VIR_DOMAIN_SHUTDOWN: "Shutting Down",
+        libvirt.VIR_DOMAIN_SHUTOFF: "Shutoff",
+        libvirt.VIR_DOMAIN_CRASHED: "Crashed",
+        libvirt.VIR_DOMAIN_PMSUSPENDED: "Suspended",
+    }
+    return states.get(state_int, "Unknown")
+
+@listing_bp.route('/list')
+def list_vms():
+    vms_list = []
+    conn = get_db_connection()
+    if conn:
+        try:
+            domains = conn.listAllDomains(0)
+            for domain in domains:
+                info = domain.info()
+                vms_list.append({
+                    'uuid': domain.UUIDString(),
+                    'name': domain.name(),
+                    'state': get_vm_state_string(info[0]),
+                    'state_code': info[0],
+                    'memory_mb': int(info[1] / 1024),
+                    'vcpus': info[3]
+                })
+        except libvirt.libvirtError as e:
+            print(f"Error: {e}")
+        finally:
+            conn.close()
+    return render_template('list.html', vms=vms_list)
+
+# --- ACTIONS ---
+
+# Add this route to your views/listing.py file
+
+@listing_bp.route('/view/<uuid>')
+def view_vm(uuid):
+    conn = get_db_connection()
+    vm_details = {}
+    
+    if conn:
+        try:
+            dom = conn.lookupByUUIDString(uuid)
+            info = dom.info()
+            
+            # info structure: [state, maxmem, mem, vcpus, cputime]
+            state_str = get_vm_state_string(info[0])
+            
+            vm_details = {
+                'uuid': dom.UUIDString(),
+                'name': dom.name(),
+                'state': state_str,
+                'state_code': info[0],
+                'memory_mb': int(info[1] / 1024),
+                'max_memory_mb': int(info[1] / 1024),
+                'vcpus': info[3],
+                'os_type': dom.OSType(),
+                'xml': dom.XMLDesc()  # The raw XML config
+            }
+        except libvirt.libvirtError as e:
+            return f"Error: {e}"
+        finally:
+            conn.close()
+            
+    return render_template('view.html', vm=vm_details)
+
+
+
+@listing_bp.route('/start/<uuid>')
+def start_vm(uuid):
+    conn = get_db_connection()
+    if conn:
+        try:
+            dom = conn.lookupByUUIDString(uuid)
+            dom.create()
+        except libvirt.libvirtError as e:
+            print(f"Error starting VM: {e}")
+        finally:
+            conn.close()
+    return redirect(url_for('listing.list_vms'))
+
+@listing_bp.route('/stop/<uuid>')
+def stop_vm(uuid):
+    conn = get_db_connection()
+    if conn:
+        try:
+            dom = conn.lookupByUUIDString(uuid)
+            if dom.isActive():
+                dom.destroy() # Force power off
+        except libvirt.libvirtError as e:
+            print(f"Error stopping VM: {e}")
+        finally:
+            conn.close()
+    return redirect(url_for('listing.list_vms'))
+
+@listing_bp.route('/delete/<uuid>')
+def delete_vm(uuid):
+    conn = get_db_connection()
+    if conn:
+        try:
+            dom = conn.lookupByUUIDString(uuid)
+            if dom.isActive():
+                dom.destroy()
+            dom.undefine()
+        except libvirt.libvirtError as e:
+            print(f"Error deleting VM: {e}")
+        finally:
+            conn.close()
+    return redirect(url_for('listing.list_vms'))
+
+# --- CONSOLE LOGIC ---
+
+@listing_bp.route('/console/<uuid>')
+def console_vm(uuid):
+    conn = get_db_connection()
+    port = None
+    
+    if conn:
+        try:
+            dom = conn.lookupByUUIDString(uuid)
+            # Get XML description of the running domain to find the VNC port
+            xml_str = dom.XMLDesc(0)
+            tree = ET.fromstring(xml_str)
+            
+            # Look for the VNC graphics node
+            graphics = tree.find("./devices/graphics[@type='vnc']")
+            if graphics is not None:
+                port = graphics.get('port')
+        except Exception as e:
+            print(f"Console Error: {e}")
+        finally:
+            conn.close()
+
+    # If VM is off or no VNC configured
+    if not port or port == '-1':
+        return "<h1>VM Not Running</h1><p>Please start the VM before opening the console.</p><a href='/list'>Back</a>"
+
+    # Detect the IP address the user is using to access this web app
+    # (This ensures it works whether you are on localhost or a remote PC)
+    host_ip = request.host.split(':')[0]
+
+    # Content of the .vv file
+    vv_content = f"""[virt-viewer]
+type=vnc
+host={host_ip}
+port={port}
+delete-this-file=1
+title=Console-{uuid}
+"""
+
+    return Response(
+        vv_content,
+        mimetype="application/x-virt-viewer",
+        headers={"Content-disposition": f"attachment; filename=console-{uuid}.vv"}
+    )
+
+

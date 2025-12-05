@@ -1,0 +1,6 @@
+find /Users/ze/vm-manager -type f \( -name "*.html" -o -name "*.py" \) -print0 \
+| while IFS= read -r -d '' file; do
+    echo "----- FILE: $file -----" >> /Users/ze/vm-manager/output.txt
+    cat "$file" >> /Users/ze/vm-manager/output.txt
+    echo "" >> /Users/ze/vm-manager/output.txt
+done

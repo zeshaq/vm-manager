@@ -56,6 +56,10 @@
         <a href="{{ url_for('listing.delete_vm', uuid=vm.uuid) }}" onclick="return confirm('Are you sure? This cannot be undone.');" style="float: right;">
             <button style="background: #6c757d; color: white; padding: 10px 20px; border: none; border-radius: 5px; cursor: pointer;">Delete VM</button>
         </a>
+
+        <a href="{{ url_for('listing.edit_vm', uuid=vm.uuid) }}">
+    <button style="background: #ffc107; color: #212529; padding: 10px 20px; border: none; border-radius: 5px; cursor: pointer; margin-right: 10px;">Edit Resources</button>
+</a>
     </div>
 
 </div>

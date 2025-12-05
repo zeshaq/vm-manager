@@ -168,3 +168,64 @@ title=Console-{uuid}
         mimetype="application/x-virt-viewer",
         headers={"Content-disposition": f"attachment; filename=console-{uuid}.vv"}
     )
+
+@listing_bp.route('/edit/<uuid>', methods=['GET', 'POST'])
+def edit_vm(uuid):
+    conn = get_db_connection()
+    if not conn:
+        return "Could not connect to Hypervisor"
+
+    try:
+        dom = conn.lookupByUUIDString(uuid)
+        
+        if request.method == 'POST':
+            # 1. Get new values
+            new_cpu = int(request.form['cpu'])
+            new_ram_mb = int(request.form['ram'])
+            new_ram_kib = new_ram_mb * 1024
+
+            # 2. Get the current XML configuration
+            # 1 = VIR_DOMAIN_XML_INACTIVE (Get the config that will be used on next boot)
+            xml_str = dom.XMLDesc(libvirt.VIR_DOMAIN_XML_INACTIVE)
+            tree = ET.fromstring(xml_str)
+
+            # 3. Update Memory
+            # Note: Libvirt XML usually has <memory> (max) and <currentMemory>
+            # For simplicity, we set both to the same value
+            mem_node = tree.find('memory')
+            curr_mem_node = tree.find('currentMemory')
+            
+            if mem_node is not None:
+                mem_node.text = str(new_ram_kib)
+                mem_node.set('unit', 'KiB')
+            
+            if curr_mem_node is not None:
+                curr_mem_node.text = str(new_ram_kib)
+                curr_mem_node.set('unit', 'KiB')
+
+            # 4. Update vCPUs
+            vcpu_node = tree.find('vcpu')
+            if vcpu_node is not None:
+                vcpu_node.text = str(new_cpu)
+
+            # 5. Redefine the VM with the updated XML
+            new_xml = ET.tostring(tree).decode()
+            conn.defineXML(new_xml)
+
+            conn.close()
+            return redirect(url_for('listing.view_vm', uuid=uuid))
+
+        # --- GET Request (Render the form) ---
+        info = dom.info()
+        vm_data = {
+            'uuid': dom.UUIDString(),
+            'name': dom.name(),
+            'ram': int(info[1] / 1024), # Max memory
+            'cpu': info[3]              # vCPUs
+        }
+        conn.close()
+        return render_template('edit.html', vm=vm_data)
+
+    except libvirt.libvirtError as e:
+        if conn: conn.close()
+        return f"Error editing VM: {e}"
