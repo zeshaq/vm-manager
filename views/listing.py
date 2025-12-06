@@ -23,6 +23,7 @@ def get_vm_state_string(state_int):
 
 # --- HELPER: FIND HOST GPUS (COMPATIBLE MODE) ---
 # --- HELPER: FIND HOST GPUS (Aggressive Scan) ---
+# --- HELPER: FIND HOST GPUS (Robust Scan) ---
 def get_host_gpus():
     """Scans host for NVIDIA devices using Libvirt NodeDevice API"""
     gpus = []
@@ -32,15 +33,43 @@ def get_host_gpus():
         return []
     
     try:
-        # 1. Get list of device names
-        try:
-            device_names = conn.listNodeDevices('pci', 0)
-        except TypeError:
-            device_names = conn.listNodeDevices(0)
+        device_names = []
+        
+        # METHOD 1: New API (Objects)
+        if hasattr(conn, 'listAllNodeDevices'):
+            try:
+                print("🔍 [GPU Scan] Using listAllNodeDevices...")
+                devices = conn.listAllNodeDevices()
+                # Extract names from objects to unify logic below
+                device_names = [d.name() for d in devices]
+            except Exception as e:
+                print(f"⚠️ [GPU Scan] listAllNodeDevices failed: {e}")
+
+        # METHOD 2: Old API (Strings)
+        if not device_names and hasattr(conn, 'listNodeDevices'):
+            try:
+                print("🔍 [GPU Scan] Using listNodeDevices...")
+                try:
+                    device_names = conn.listNodeDevices('pci', 0)
+                except TypeError:
+                    device_names = conn.listNodeDevices(0)
+            except Exception as e:
+                print(f"⚠️ [GPU Scan] listNodeDevices failed: {e}")
+
+        # METHOD 3: Ancient/Alternative API (Fallback that likely worked for you)
+        if not device_names:
+            try:
+                if hasattr(conn, 'listDevices'):
+                    print("🔍 [GPU Scan] Using listDevices (Fallback)...")
+                    device_names = conn.listDevices('pci', 0)
+                else:
+                    print("❌ [GPU Scan] Critical: No listing methods available on this libvirt version.")
+            except Exception as e:
+                print(f"⚠️ [GPU Scan] listDevices failed: {e}")
 
         print(f"🔍 [GPU Scan] Scanned {len(device_names)} total host devices.")
 
-        # 2. Loop through names
+        # Process the names found
         for name in device_names:
             try:
                 dev = conn.nodeDeviceLookupByName(name)
@@ -48,31 +77,27 @@ def get_host_gpus():
             except libvirt.libvirtError:
                 continue
 
-            # 3. DIRTY CHECK: If "0x10de" (NVIDIA ID) is not in the text at all, skip it.
-            # This matches your working debug script logic exactly.
+            # DIRTY CHECK: If "0x10de" (NVIDIA ID) is not in the text, skip.
             if "0x10de" not in xml_str.lower():
                 continue
 
-            # 4. If we are here, it's an NVIDIA device. Let's parse it.
+            # Parse XML
             try:
                 tree = ET.fromstring(xml_str)
                 
-                # Verify it is a PCI device (to avoid USB controllers on the card)
+                # Double check it is PCI 
                 is_pci = False
                 for cap in tree.findall('capability'):
                     if cap.get('type') == 'pci':
                         is_pci = True
                         break
-                
-                if not is_pci: 
-                    continue
+                if not is_pci: continue
 
                 # Get Name
                 product = tree.find(".//product")
                 if product is not None and product.text:
                     product_name = product.text
                 else:
-                    # Fallback for L40S where name is often missing in XML
                     product_name = f"NVIDIA GPU ({name})"
 
                 # Get PCI Address
