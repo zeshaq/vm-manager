@@ -22,20 +22,25 @@ def get_vm_state_string(state_int):
     return states.get(state_int, "Unknown")
 
 # --- HELPER: FIND HOST GPUS (COMPATIBLE MODE) ---
+# --- HELPER: FIND HOST GPUS (Aggressive Scan) ---
 def get_host_gpus():
     """Scans host for NVIDIA devices using Libvirt NodeDevice API"""
     gpus = []
     conn = get_db_connection()
-    if not conn: return []
+    if not conn: 
+        print("❌ [GPU Scan] Could not connect to Libvirt.")
+        return []
     
     try:
-        # 1. Get list of device names (strings) - Compatible with older Libvirt
+        # 1. Get list of device names
         try:
             device_names = conn.listNodeDevices('pci', 0)
         except TypeError:
             device_names = conn.listNodeDevices(0)
 
-        # 2. Loop through names and lookup objects
+        print(f"🔍 [GPU Scan] Scanned {len(device_names)} total host devices.")
+
+        # 2. Loop through names
         for name in device_names:
             try:
                 dev = conn.nodeDeviceLookupByName(name)
@@ -43,31 +48,36 @@ def get_host_gpus():
             except libvirt.libvirtError:
                 continue
 
-            tree = ET.fromstring(xml_str)
-            
-            # Double check it is PCI
-            is_pci = False
-            for cap in tree.findall('capability'):
-                if cap.get('type') == 'pci':
-                    is_pci = True
-                    break
-            if not is_pci: continue
+            # 3. DIRTY CHECK: If "0x10de" (NVIDIA ID) is not in the text at all, skip it.
+            # This matches your working debug script logic exactly.
+            if "0x10de" not in xml_str.lower():
+                continue
 
-            # 3. Check for NVIDIA Vendor ID (0x10de)
-            vendor = tree.find(".//vendor")
-            if vendor is not None and vendor.get('id') == '0x10de':
+            # 4. If we are here, it's an NVIDIA device. Let's parse it.
+            try:
+                tree = ET.fromstring(xml_str)
                 
-                # Robust Product Name Logic (Handles missing text)
+                # Verify it is a PCI device (to avoid USB controllers on the card)
+                is_pci = False
+                for cap in tree.findall('capability'):
+                    if cap.get('type') == 'pci':
+                        is_pci = True
+                        break
+                
+                if not is_pci: 
+                    continue
+
+                # Get Name
                 product = tree.find(".//product")
                 if product is not None and product.text:
                     product_name = product.text
                 else:
-                    # Fallback if XML is missing the name (e.g. your L40S)
+                    # Fallback for L40S where name is often missing in XML
                     product_name = f"NVIDIA GPU ({name})"
-                
+
+                # Get PCI Address
                 address = tree.find(".//address")
                 if address is not None:
-                    # Clean up hex strings
                     domain = address.get('domain').replace('0x', '')
                     bus = address.get('bus').replace('0x', '')
                     slot = address.get('slot').replace('0x', '')
@@ -75,6 +85,8 @@ def get_host_gpus():
                     
                     pci_str = f"{domain.zfill(4)}:{bus}:{slot}.{function}"
                     
+                    print(f"✅ [GPU Scan] Found: {product_name} at {pci_str}")
+
                     gpus.append({
                         'name': product_name,
                         'pci_id': pci_str, 
@@ -82,8 +94,11 @@ def get_host_gpus():
                         'slot': slot,
                         'function': function
                     })
+            except Exception as parse_err:
+                print(f"⚠️ [GPU Scan] Parsing error for {name}: {parse_err}")
+
     except Exception as e:
-        print(f"GPU Scan Error: {e}")
+        print(f"❌ [GPU Scan] Critical Error: {e}")
     finally:
         conn.close()
     
