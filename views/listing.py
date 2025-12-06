@@ -1,5 +1,6 @@
 import libvirt
 import xml.etree.ElementTree as ET
+import re
 from flask import Blueprint, render_template, request, redirect, url_for, Response
 
 listing_bp = Blueprint('listing', __name__)
@@ -20,6 +21,55 @@ def get_vm_state_string(state_int):
         libvirt.VIR_DOMAIN_PMSUSPENDED: "Suspended",
     }
     return states.get(state_int, "Unknown")
+
+# --- HELPER: FIND HOST GPUS ---
+def get_host_gpus():
+    """Scans host for NVIDIA devices using Libvirt NodeDevice API"""
+    gpus = []
+    conn = get_db_connection()
+    if not conn: return []
+    
+    try:
+        # List all PCI devices
+        for dev in conn.listAllNodeDevices():
+            xml_str = dev.XMLDesc()
+            tree = ET.fromstring(xml_str)
+            
+            # Check for NVIDIA Vendor ID (0x10de) inside capability
+            vendor = tree.find(".//vendor")
+            if vendor is not None and vendor.get('id') == '0x10de':
+                
+                # Get Product Name
+                product = tree.find(".//product")
+                product_name = product.text if product is not None else "Unknown NVIDIA Device"
+                
+                # Get Address (Bus, Slot, Function)
+                address = tree.find(".//address")
+                if address is not None:
+                    # Clean up hex strings (remove 0x)
+                    domain = address.get('domain').replace('0x', '')
+                    bus = address.get('bus').replace('0x', '')
+                    slot = address.get('slot').replace('0x', '')
+                    function = address.get('function').replace('0x', '')
+                    
+                    # Format for display: 0000:8a:00.0
+                    pci_str = f"{domain.zfill(4)}:{bus}:{slot}.{function}"
+                    
+                    gpus.append({
+                        'name': product_name,
+                        'pci_id': pci_str, 
+                        'bus': bus,
+                        'slot': slot,
+                        'function': function
+                    })
+    except Exception as e:
+        print(f"GPU Scan Error: {e}")
+    finally:
+        conn.close()
+    
+    # Sort by Bus ID
+    gpus.sort(key=lambda x: x['pci_id'])
+    return gpus
 
 @listing_bp.route('/list')
 def list_vms():
@@ -60,6 +110,9 @@ def view_vm(uuid):
             dom = conn.lookupByUUIDString(uuid)
             info = dom.info()
             
+            # Get Host GPUs for the dropdown
+            available_gpus = get_host_gpus()
+
             # Use INACTIVE XML to see configuration
             xml_str = dom.XMLDesc(libvirt.VIR_DOMAIN_XML_INACTIVE)
             tree = ET.fromstring(xml_str)
@@ -116,7 +169,34 @@ def view_vm(uuid):
                     'ips': []
                 })
 
-            # --- 3. Live IPs ---
+            # --- 3. Host GPUs (Passthrough) ---
+            hostdevs = []
+            for hdev in tree.findall('devices/hostdev'):
+                if hdev.get('type') == 'pci':
+                    src = hdev.find('source/address')
+                    if src is not None:
+                        # Reconstruct the PCI address string
+                        bus = src.get('bus').replace('0x', '')
+                        slot = src.get('slot').replace('0x', '')
+                        func = src.get('function').replace('0x', '')
+                        
+                        pci_str = f"0000:{bus}:{slot}.{func}"
+                        name = "Unknown PCI Device"
+                        
+                        # Match against our scanned list to get the real name (e.g. NVIDIA L40S)
+                        for g in available_gpus:
+                            if g['pci_id'].endswith(f":{bus}:{slot}.{func}"):
+                                name = g['name']
+                                
+                        hostdevs.append({
+                            'name': name,
+                            'pci_id': pci_str,
+                            'bus': f"0x{bus}",
+                            'slot': f"0x{slot}",
+                            'function': f"0x{func}"
+                        })
+
+            # --- 4. Live IPs ---
             if info[0] == libvirt.VIR_DOMAIN_RUNNING:
                 try:
                     live_dom = conn.lookupByUUIDString(uuid)
@@ -127,7 +207,7 @@ def view_vm(uuid):
                                 k_iface['ips'] = [ip['addr'] for ip in val.get('addrs', [])]
                 except: pass
 
-            # --- 4. Legacy Boot Fallback ---
+            # --- 5. Legacy Boot Fallback ---
             if not current_boot['1']:
                 os_boot = tree.findall('os/boot')
                 if len(os_boot) > 0:
@@ -152,6 +232,8 @@ def view_vm(uuid):
                 'os_type': dom.OSType(),
                 'interfaces': interfaces,
                 'disks': disks,
+                'host_gpus': hostdevs,        # <--- Added
+                'available_gpus': available_gpus, # <--- Added
                 'current_boot': current_boot
             }
         except libvirt.libvirtError as e:
@@ -317,6 +399,73 @@ def delete_interface(uuid):
                 dom.detachDeviceFlags(iface_xml, flags)
         except libvirt.libvirtError as e: return f"Error: {e}"
         finally: conn.close()
+    return redirect(url_for('listing.view_vm', uuid=uuid))
+
+# --- GPU PASSTHROUGH MANAGEMENT (NEW) ---
+
+@listing_bp.route('/gpu/attach/<uuid>', methods=['POST'])
+def attach_gpu(uuid):
+    pci_id = request.form.get('pci_id') # Expects format "0000:8a:00.0"
+    if not pci_id: return "No GPU selected"
+    
+    # Parse the string back to hex components
+    parts = pci_id.split(':')
+    # parts[0] = domain (0000), parts[1] = bus (8a), parts[2] = slot.function (00.0)
+    bus = f"0x{parts[1]}"
+    slot_func = parts[2].split('.')
+    slot = f"0x{slot_func[0]}"
+    function = f"0x{slot_func[1]}"
+    
+    # Managed='yes' means Libvirt will detach from host driver automatically
+    xml = f"""
+    <hostdev mode='subsystem' type='pci' managed='yes'>
+      <source>
+        <address domain='0x0000' bus='{bus}' slot='{slot}' function='{function}'/>
+      </source>
+    </hostdev>
+    """
+    
+    conn = get_db_connection()
+    if conn:
+        try:
+            dom = conn.lookupByUUIDString(uuid)
+            flags = libvirt.VIR_DOMAIN_AFFECT_CONFIG
+            if dom.isActive(): flags |= libvirt.VIR_DOMAIN_AFFECT_LIVE
+            
+            dom.attachDeviceFlags(xml, flags)
+        except libvirt.libvirtError as e:
+            return f"<h1>Error Attaching GPU</h1><p>{e}</p><p>Ensure IOMMU is enabled and device is not in use.</p><a href='/view/{uuid}'>Back</a>"
+        finally:
+            conn.close()
+            
+    return redirect(url_for('listing.view_vm', uuid=uuid))
+
+@listing_bp.route('/gpu/detach/<uuid>', methods=['POST'])
+def detach_gpu(uuid):
+    bus = request.form.get('bus')
+    slot = request.form.get('slot')
+    function = request.form.get('function')
+    
+    xml = f"""
+    <hostdev mode='subsystem' type='pci' managed='yes'>
+      <source>
+        <address domain='0x0000' bus='{bus}' slot='{slot}' function='{function}'/>
+      </source>
+    </hostdev>
+    """
+    
+    conn = get_db_connection()
+    if conn:
+        try:
+            dom = conn.lookupByUUIDString(uuid)
+            flags = libvirt.VIR_DOMAIN_AFFECT_CONFIG
+            if dom.isActive(): flags |= libvirt.VIR_DOMAIN_AFFECT_LIVE
+            dom.detachDeviceFlags(xml, flags)
+        except libvirt.libvirtError as e:
+            return f"Error: {e}"
+        finally:
+            conn.close()
+            
     return redirect(url_for('listing.view_vm', uuid=uuid))
 
 # --- ACTIONS ---
