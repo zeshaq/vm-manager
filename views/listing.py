@@ -1,6 +1,5 @@
 import libvirt
 import xml.etree.ElementTree as ET
-import re
 from flask import Blueprint, render_template, request, redirect, url_for, Response
 
 listing_bp = Blueprint('listing', __name__)
@@ -22,7 +21,7 @@ def get_vm_state_string(state_int):
     }
     return states.get(state_int, "Unknown")
 
-# --- HELPER: FIND HOST GPUS ---
+# --- HELPER: FIND HOST GPUS (COMPATIBLE MODE) ---
 def get_host_gpus():
     """Scans host for NVIDIA devices using Libvirt NodeDevice API"""
     gpus = []
@@ -30,29 +29,50 @@ def get_host_gpus():
     if not conn: return []
     
     try:
-        # List all PCI devices
-        for dev in conn.listAllNodeDevices():
-            xml_str = dev.XMLDesc()
+        # 1. Get list of device names (strings) - Compatible with older Libvirt
+        try:
+            device_names = conn.listNodeDevices('pci', 0)
+        except TypeError:
+            device_names = conn.listNodeDevices(0)
+
+        # 2. Loop through names and lookup objects
+        for name in device_names:
+            try:
+                dev = conn.nodeDeviceLookupByName(name)
+                xml_str = dev.XMLDesc()
+            except libvirt.libvirtError:
+                continue
+
             tree = ET.fromstring(xml_str)
             
-            # Check for NVIDIA Vendor ID (0x10de) inside capability
+            # Double check it is PCI
+            is_pci = False
+            for cap in tree.findall('capability'):
+                if cap.get('type') == 'pci':
+                    is_pci = True
+                    break
+            if not is_pci: continue
+
+            # 3. Check for NVIDIA Vendor ID (0x10de)
             vendor = tree.find(".//vendor")
             if vendor is not None and vendor.get('id') == '0x10de':
                 
-                # Get Product Name
+                # Robust Product Name Logic (Handles missing text)
                 product = tree.find(".//product")
-                product_name = product.text if product is not None else "Unknown NVIDIA Device"
+                if product is not None and product.text:
+                    product_name = product.text
+                else:
+                    # Fallback if XML is missing the name (e.g. your L40S)
+                    product_name = f"NVIDIA GPU ({name})"
                 
-                # Get Address (Bus, Slot, Function)
                 address = tree.find(".//address")
                 if address is not None:
-                    # Clean up hex strings (remove 0x)
+                    # Clean up hex strings
                     domain = address.get('domain').replace('0x', '')
                     bus = address.get('bus').replace('0x', '')
                     slot = address.get('slot').replace('0x', '')
                     function = address.get('function').replace('0x', '')
                     
-                    # Format for display: 0000:8a:00.0
                     pci_str = f"{domain.zfill(4)}:{bus}:{slot}.{function}"
                     
                     gpus.append({
@@ -67,7 +87,6 @@ def get_host_gpus():
     finally:
         conn.close()
     
-    # Sort by Bus ID
     gpus.sort(key=lambda x: x['pci_id'])
     return gpus
 
@@ -232,8 +251,8 @@ def view_vm(uuid):
                 'os_type': dom.OSType(),
                 'interfaces': interfaces,
                 'disks': disks,
-                'host_gpus': hostdevs,        # <--- Added
-                'available_gpus': available_gpus, # <--- Added
+                'host_gpus': hostdevs,        
+                'available_gpus': available_gpus, 
                 'current_boot': current_boot
             }
         except libvirt.libvirtError as e:
@@ -401,7 +420,7 @@ def delete_interface(uuid):
         finally: conn.close()
     return redirect(url_for('listing.view_vm', uuid=uuid))
 
-# --- GPU PASSTHROUGH MANAGEMENT (NEW) ---
+# --- GPU PASSTHROUGH MANAGEMENT ---
 
 @listing_bp.route('/gpu/attach/<uuid>', methods=['POST'])
 def attach_gpu(uuid):
@@ -410,7 +429,6 @@ def attach_gpu(uuid):
     
     # Parse the string back to hex components
     parts = pci_id.split(':')
-    # parts[0] = domain (0000), parts[1] = bus (8a), parts[2] = slot.function (00.0)
     bus = f"0x{parts[1]}"
     slot_func = parts[2].split('.')
     slot = f"0x{slot_func[0]}"

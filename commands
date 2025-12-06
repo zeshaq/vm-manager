@@ -5,3 +5,8 @@ find ~/vm-manager -type f \( -name "*.py" -o -name "*.html" \) -print0 \
     cat "$file" >> all_code.txt
     echo -e "\n\n" >> all_code.txt
 done
+
+
+
+    git config --global user.name "zahid"
+    git config --global user.email zeshaq@gmail.com
