@@ -37,10 +37,49 @@ def logout():
     session.pop('username', None)
     return redirect(url_for('login'))
 
+import libvirt
+
 # Simple route for the root URL
 @app.route('/')
 def index():
-    return render_template('home.html')
+    conn = libvirt.open('qemu:///system')
+    host_info = {}
+    if conn:
+        try:
+            # Get Host CPU Info
+            node_info = conn.getInfo()
+            host_info['cpu_cores'] = node_info[2]
+            
+            # Get Host Memory Info
+            mem_info = conn.getMemoryStats(0)
+            host_info['mem_total_gb'] = round(mem_info['total'] / (1024**2), 2)
+            host_info['mem_free_gb'] = round(mem_info['free'] / (1024**2), 2)
+            host_info['mem_used_gb'] = round(host_info['mem_total_gb'] - host_info['mem_free_gb'], 2)
+            if host_info['mem_total_gb'] > 0:
+                host_info['mem_percent_used'] = round((host_info['mem_used_gb'] / host_info['mem_total_gb']) * 100, 1)
+            else:
+                host_info['mem_percent_used'] = 0
+
+            # Get Storage Pool Info
+            storage_pools = []
+            for pool_name in conn.listStoragePools():
+                pool = conn.storagePoolLookupByName(pool_name)
+                pool.refresh(0)
+                info = pool.info()
+                storage_pools.append({
+                    'name': pool_name,
+                    'capacity_gb': round(info[1] / (1024**3), 2),
+                    'allocation_gb': round(info[2] / (1024**3), 2),
+                    'available_gb': round(info[3] / (1024**3), 2)
+                })
+            host_info['storage_pools'] = storage_pools
+
+        except libvirt.libvirtError as e:
+            print(f"Error getting host info: {e}")
+        finally:
+            conn.close()
+            
+    return render_template('home.html', host=host_info)
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000, debug=True)
