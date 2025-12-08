@@ -282,6 +282,14 @@ def view_vm(uuid):
                     elif dev == 'cdrom': current_boot['2'] = 'cdrom_generic'
                     elif dev == 'network': current_boot['2'] = 'network'
 
+            # --- 6. Snapshots ---
+            snapshots = []
+            try:
+                snapshot_names = dom.snapshotListNames(0)
+                snapshots = [{'name': name} for name in snapshot_names]
+            except libvirt.libvirtError:
+                pass # Snapshots not supported or no snapshots
+
             vm_details = {
                 'uuid': dom.UUIDString(),
                 'name': dom.name(),
@@ -295,7 +303,8 @@ def view_vm(uuid):
                 'disks': disks,
                 'host_gpus': hostdevs,        
                 'available_gpus': available_gpus, 
-                'current_boot': current_boot
+                'current_boot': current_boot,
+                'snapshots': snapshots
             }
         except libvirt.libvirtError as e:
             return f"Error: {e}"
@@ -719,5 +728,49 @@ def vm_stats(uuid):
     except libvirt.libvirtError as e:
         return jsonify({'error': str(e)})
     finally:
-        if conn:
             conn.close()
+            
+@listing_bp.route('/snapshot/create/<uuid>', methods=['POST'])
+def create_snapshot(uuid):
+    snapshot_name = request.form['snapshot_name']
+    conn = get_db_connection()
+    if conn:
+        try:
+            dom = conn.lookupByUUIDString(uuid)
+            xml = f"<domainsnapshot><name>{snapshot_name}</name></domainsnapshot>"
+            dom.snapshotCreateXML(xml, 0)
+        except libvirt.libvirtError as e:
+            return f"Error creating snapshot: {e}"
+        finally:
+            conn.close()
+    return redirect(url_for('listing.view_vm', uuid=uuid))
+
+@listing_bp.route('/snapshot/revert/<uuid>', methods=['POST'])
+def revert_snapshot(uuid):
+    snapshot_name = request.form['snapshot_name']
+    conn = get_db_connection()
+    if conn:
+        try:
+            dom = conn.lookupByUUIDString(uuid)
+            snapshot = dom.snapshotLookupByName(snapshot_name, 0)
+            dom.revertToSnapshot(snapshot, 0)
+        except libvirt.libvirtError as e:
+            return f"Error reverting to snapshot: {e}"
+        finally:
+            conn.close()
+    return redirect(url_for('listing.view_vm', uuid=uuid))
+
+@listing_bp.route('/snapshot/delete/<uuid>', methods=['POST'])
+def delete_snapshot(uuid):
+    snapshot_name = request.form['snapshot_name']
+    conn = get_db_connection()
+    if conn:
+        try:
+            dom = conn.lookupByUUIDString(uuid)
+            snapshot = dom.snapshotLookupByName(snapshot_name, 0)
+            snapshot.delete(0)
+        except libvirt.libvirtError as e:
+            return f"Error deleting snapshot: {e}"
+        finally:
+            conn.close()
+    return redirect(url_for('listing.view_vm', uuid=uuid))
