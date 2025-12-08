@@ -4,6 +4,7 @@ import libvirt
 import os
 import subprocess
 import requests
+from .shared_utils import check_haproxy_installed, check_config_dirs, check_sudo_permissions
 
 # --- Blueprint Setup ---
 lb_bp = Blueprint('loadbalancer', __name__)

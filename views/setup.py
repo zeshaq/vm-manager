@@ -3,7 +3,7 @@ import shutil
 import os
 import subprocess
 import getpass
-from .loadbalancer import generate_haproxy_config
+from .shared_utils import check_haproxy_installed, check_config_dirs, check_sudo_permissions
 
 # --- Blueprint Setup ---
 setup_bp = Blueprint('setup', __name__)
@@ -20,29 +20,6 @@ def get_package_manager():
     if shutil.which('yum'):
         return 'yum'
     return None
-
-def check_haproxy_installed():
-    """Checks if HAProxy is installed."""
-    return shutil.which('haproxy') is not None
-
-def check_config_dirs():
-    """Checks if the required /etc/vm-manager directories exist."""
-    return os.path.isdir('/etc/vm-manager/haproxy')
-
-def check_sudo_permissions():
-    """Checks if the current user has passwordless sudo for the reload command."""
-    command = ['sudo', '-n', '/bin/systemctl', 'reload', 'haproxy']
-    # We expect this to fail if HAProxy isn't running, but a non-zero exit code
-    # due to a password prompt is what we're looking for.
-    # A password prompt typically returns 1.
-    try:
-        result = subprocess.run(command, capture_output=True)
-        # If successful (0) or fails for reasons other than password (e.g., service not found),
-        # it means sudo didn't ask for a password.
-        return result.returncode != 1 or b'password' not in result.stderr.lower()
-    except FileNotFoundError:
-        # sudo or systemctl not found
-        return False
 
 # --- Route ---
 
@@ -89,8 +66,7 @@ def setup_page():
 @setup_bp.route('/setup/initialize')
 def initialize_haproxy():
     """Route to trigger the initial creation of the haproxy.cfg."""
-    # This function is imported from the loadbalancer blueprint.
-    # It already contains the necessary sudo commands and error handling.
+    from .loadbalancer import generate_haproxy_config
     generate_haproxy_config()
     flash("Attempted to create initial HAProxy configuration and reload the service.", "success")
     return redirect(url_for('setup.setup_page'))
