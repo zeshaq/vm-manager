@@ -3,6 +3,7 @@ import json
 import libvirt
 import os
 import subprocess
+import requests
 from .setup import check_haproxy_installed, check_config_dirs, check_sudo_permissions
 
 # --- Blueprint Setup ---
@@ -188,3 +189,16 @@ def delete_route():
     generate_haproxy_config()
 
     return redirect(url_for('loadbalancer.manage_loadbalancer'))
+
+@lb_bp.route('/loadbalancer/stats')
+def stats_proxy():
+    """Fetches the HAProxy stats page and displays it within our UI."""
+    stats_url = 'http://127.0.0.1:8404/'
+    try:
+        response = requests.get(stats_url)
+        response.raise_for_status()  # Raise an exception for bad status codes
+        return render_template('stats.html', stats_content=response.text)
+    except requests.exceptions.RequestException as e:
+        error_msg = f"Could not connect to HAProxy stats page at {stats_url}. Is HAProxy running?"
+        print(f"❌ Stats Proxy Error: {e}")
+        return render_template('stats.html', error=error_msg)

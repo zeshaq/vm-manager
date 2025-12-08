@@ -9,9 +9,11 @@
             <h1>Load Balancer Routes</h1>
             <p style="color: #666; margin: 0;">Map public hostnames to your running VMs.</p>
         </div>
-        <a href="http://{{ request.host.split(':')[0] }}:8404" target="_blank">
+        {% if setup_complete %}
+        <a href="{{ url_for('loadbalancer.stats_proxy') }}">
             <button style="background: #6c757d;">View HAProxy Stats</button>
         </a>
+        {% endif %}
     </div>
 
     <!-- Flash Messages -->
@@ -25,23 +27,30 @@
         {% endif %}
     {% endwith %}
 
+    {% if not setup_complete %}
+    <div style="padding: 15px; margin-bottom: 20px; border-radius: 4px; color: #856404; background-color: #fff3cd; border: 1px solid #ffeeba;">
+        <strong>Setup Incomplete:</strong> The load balancer requires setup before you can add routes.
+        <a href="{{ url_for('setup.setup_page') }}" style="font-weight: bold; color: #856404;">Go to Setup</a>
+    </div>
+    {% endif %}
+
     <!-- Create New Route Form -->
     <div style="background:#f1f1f1; padding: 20px; margin-bottom:30px; border-radius: 8px;">
         <h3 style="margin-top: 0;">Add New Route</h3>
         <form action="{{ url_for('loadbalancer.add_route') }}" method="POST" style="display: grid; grid-template-columns: 1fr 1fr 80px 100px; gap: 15px; align-items: center;">
             
-            <input type="text" name="frontend_host" placeholder="app.example.com" required style="padding: 8px; border: 1px solid #ccc; border-radius: 4px;">
+            <input type="text" name="frontend_host" placeholder="app.example.com" required style="padding: 8px; border: 1px solid #ccc; border-radius: 4px;" {% if not setup_complete %}disabled{% endif %}>
             
-            <select name="vm_selection" required style="padding: 8px; border: 1px solid #ccc; border-radius: 4px; background: white;">
+            <select name="vm_selection" required style="padding: 8px; border: 1px solid #ccc; border-radius: 4px; background: white;" {% if not setup_complete %}disabled{% endif %}>
                 <option value="" disabled selected>-- Select a Running VM --</option>
                 {% for vm in vms %}
                     <option value="{{ vm.uuid }}|{{ vm.name }}">{{ vm.name }}</option>
                 {% endfor %}
             </select>
             
-            <input type="number" name="backend_port" placeholder="Port" min="1" max="65535" required style="padding: 8px; border: 1px solid #ccc; border-radius: 4px;">
+            <input type="number" name="backend_port" placeholder="Port" min="1" max="65535" required style="padding: 8px; border: 1px solid #ccc; border-radius: 4px;" {% if not setup_complete %}disabled{% endif %}>
             
-            <button type="submit" style="background:#28a745; color:white; border:none; padding: 8px 12px; border-radius:4px; cursor:pointer;">+ Add</button>
+            <button type="submit" style="background:#28a745; color:white; border:none; padding: 8px 12px; border-radius:4px; cursor:pointer;" {% if not setup_complete %}disabled{% endif %}>+ Add</button>
         </form>
     </div>
 

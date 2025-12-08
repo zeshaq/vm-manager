@@ -1,0 +1,50 @@
+{% extends 'base.html' %}
+
+{% block content %}
+<div style="background: white; padding: 30px; border-radius: 8px; box-shadow: 0 2px 5px rgba(0,0,0,0.1);">
+
+    <!-- Page Header -->
+    <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 2px solid #eee; padding-bottom: 10px; margin-bottom: 20px;">
+        <div>
+            <h1>HAProxy Statistics</h1>
+            <p style="color: #666; margin: 0;">Live statistics for the integrated load balancer.</p>
+        </div>
+        <a href="{{ url_for('loadbalancer.manage_loadbalancer') }}">
+            <button style="background: #007bff;">← Back to Routes</button>
+        </a>
+    </div>
+    
+    {% if error %}
+        <div style="padding: 15px; margin-bottom: 20px; border-radius: 4px; color: #721c24; background-color: #f8d7da; border: 1px solid #f5c6cb;">
+            <strong>Error:</strong> {{ error }}
+        </div>
+    {% else %}
+        <!-- HAProxy content will be injected here -->
+        <div class="haproxy-stats-container">
+            {{ stats_content|safe }}
+        </div>
+    {% endif %}
+    
+</div>
+
+<!-- Some basic styling to make the injected stats look better -->
+<style>
+    .haproxy-stats-container table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 0.8em;
+        margin-top: 0;
+    }
+    .haproxy-stats-container th,
+    .haproxy-stats-container td {
+        padding: 5px;
+        border: 1px solid #ccc;
+    }
+    .haproxy-stats-container th {
+        background-color: #f2f2f2;
+    }
+    .haproxy-stats-container h1 {
+        font-size: 1.2em;
+    }
+</style>
+{% endblock %}
