@@ -646,43 +646,78 @@ def monitor_vm(uuid):
 @listing_bp.route('/api/stats/<uuid>')
 def vm_stats(uuid):
     conn = get_db_connection()
-    stats = {}
-    if conn:
-        try:
-            dom = conn.lookupByUUIDString(uuid)
-            if dom.isActive():
-                # Get CPU stats
-                t1 = time.time()
-                c1 = dom.info()[4]
-                time.sleep(1)
-                t2 = time.time()
-                c2 = dom.info()[4]
-                cpu_usage = (c2 - c1) * 100 / ((t2 - t1) * dom.info()[3] * 1e9)
-                
-                # Get memory stats
-                mem_stats = dom.memoryStats()
-                mem_used = mem_stats['actual'] / 1024
-                
-                # Get disk stats
-                disk_stats = dom.blockStats('vda')
+    if not conn:
+        return jsonify({'error': 'Could not connect to libvirt'})
+    
+    try:
+        dom = conn.lookupByUUIDString(uuid)
+        if not dom.isActive():
+            return jsonify({'error': 'VM is not running.'})
+
+        # --- Dynamic Device Discovery ---
+        xml_str = dom.XMLDesc(0)
+        tree = ET.fromstring(xml_str)
+        
+        disk_target = None
+        disk_devices = tree.findall('devices/disk')
+        for disk in disk_devices:
+            if disk.get('device') == 'disk':
+                target = disk.find('target')
+                if target is not None:
+                    disk_target = target.get('dev')
+                    break
+        
+        net_target = None
+        net_interfaces = tree.findall('devices/interface')
+        if net_interfaces:
+            target = net_interfaces[0].find('target')
+            if target is not None:
+                net_target = target.get('dev')
+
+        # --- CPU Stats ---
+        t1 = time.time()
+        c1 = dom.info()[4]
+        time.sleep(1)
+        t2 = time.time()
+        c2 = dom.info()[4]
+        cpu_usage = (c2 - c1) * 100 / ((t2 - t1) * dom.info()[3] * 1e9)
+        
+        # --- Memory Stats ---
+        mem_stats = dom.memoryStats()
+        mem_used = mem_stats.get('actual', 0) / 1024 # Use .get for safety
+
+        # --- Disk Stats ---
+        disk_read_bytes, disk_write_bytes = 0, 0
+        if disk_target:
+            try:
+                disk_stats = dom.blockStats(disk_target)
                 disk_read_bytes = disk_stats[1]
                 disk_write_bytes = disk_stats[3]
-                
-                # Get network stats
-                net_stats = dom.interfaceStats('vnet0')
+            except libvirt.libvirtError:
+                pass # Device might not be hot-pluggable or ready
+
+        # --- Network Stats ---
+        net_rx_bytes, net_tx_bytes = 0, 0
+        if net_target:
+            try:
+                net_stats = dom.interfaceStats(net_target)
                 net_rx_bytes = net_stats[0]
                 net_tx_bytes = net_stats[4]
-                
-                stats = {
-                    'cpu_usage': cpu_usage,
-                    'mem_used': mem_used,
-                    'disk_read': disk_read_bytes,
-                    'disk_write': disk_write_bytes,
-                    'net_rx': net_rx_bytes,
-                    'net_tx': net_tx_bytes
-                }
-        except libvirt.libvirtError as e:
-            return jsonify({'error': str(e)})
-        finally:
+            except libvirt.libvirtError:
+                pass # Interface might not be up
+
+        stats = {
+            'cpu_usage': round(cpu_usage, 2),
+            'mem_used': round(mem_used, 2),
+            'disk_read': disk_read_bytes,
+            'disk_write': disk_write_bytes,
+            'net_rx': net_rx_bytes,
+            'net_tx': net_tx_bytes
+        }
+        return jsonify(stats)
+
+    except libvirt.libvirtError as e:
+        return jsonify({'error': str(e)})
+    finally:
+        if conn:
             conn.close()
-    return jsonify(stats)
