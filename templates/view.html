@@ -255,6 +255,7 @@
         {% if vm.state_code == 1 %}
             <a href="{{ url_for('listing.console_vm', uuid=vm.uuid) }}"><button style="background: #343a40; color:white; padding:10px 20px; border:none; border-radius:5px; cursor:pointer; margin-right:10px;">Open Console</button></a>
             <a href="{{ url_for('listing.stop_vm', uuid=vm.uuid) }}" onclick="return confirm('Force Stop?');"><button style="background: #dc3545; color:white; padding:10px 20px; border:none; border-radius:5px; cursor:pointer;">Stop VM</button></a>
+            <a href="{{ url_for('listing.monitor_vm', uuid=vm.uuid) }}"><button style="background: #007bff; color:white; padding:10px 20px; border:none; border-radius:5px; cursor:pointer;">Live Monitor</button></a>
         {% else %}
             <a href="{{ url_for('listing.start_vm', uuid=vm.uuid) }}"><button style="background: #28a745; color:white; padding:10px 20px; border:none; border-radius:5px; cursor:pointer;">Start VM</button></a>
         {% endif %}

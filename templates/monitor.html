@@ -1,0 +1,115 @@
+{% extends 'base.html' %}
+
+{% block content %}
+<div style="background: white; padding: 30px; border-radius: 8px; box-shadow: 0 2px 5px rgba(0,0,0,0.1);">
+    <a href="{{ url_for('listing.view_vm', uuid=vm.uuid) }}" style="text-decoration: none; color: #666;">← Back to {{ vm.name }}</a>
+    <h1 style="margin-top: 10px;">Live Monitoring: {{ vm.name }}</h1>
+    
+    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-top: 20px;">
+        <div>
+            <h2>CPU Usage (%)</h2>
+            <canvas id="cpuChart" width="400" height="200"></canvas>
+        </div>
+        <div>
+            <h2>Memory Usage (MB)</h2>
+            <canvas id="memChart" width="400" height="200"></canvas>
+        </div>
+        <div>
+            <h2>Disk I/O (Bytes/s)</h2>
+            <canvas id="diskChart" width="400" height="200"></canvas>
+        </div>
+        <div>
+            <h2>Network I/O (Bytes/s)</h2>
+            <canvas id="netChart" width="400" height="200"></canvas>
+        </div>
+    </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script>
+    const MAX_DATA_POINTS = 20;
+
+    function createRealTimeChart(elementId, title) {
+        const ctx = document.getElementById(elementId).getContext('2d');
+        return new Chart(ctx, {
+            type: 'line',
+            data: {
+                labels: [],
+                datasets: [{
+                    label: title,
+                    data: [],
+                    borderColor: 'rgba(75, 192, 192, 1)',
+                    borderWidth: 1,
+                    fill: false
+                }]
+            },
+            options: {
+                scales: {
+                    x: {
+                        type: 'time',
+                        time: {
+                            unit: 'second'
+                        }
+                    },
+                    y: {
+                        beginAtZero: true
+                    }
+                }
+            }
+        });
+    }
+
+    const cpuChart = createRealTimeChart('cpuChart', 'CPU Usage (%)');
+    const memChart = createRealTimeChart('memChart', 'Memory Usage (MB)');
+    const diskChart = createRealTimeChart('diskChart', 'Disk I/O (Bytes/s)');
+    const netChart = createRealTimeChart('netChart', 'Network I/O (Bytes/s)');
+    
+    // Adjust Disk and Net charts for two datasets
+    diskChart.data.datasets = [
+        { label: 'Read', data: [], borderColor: 'rgba(255, 99, 132, 1)', borderWidth: 1, fill: false },
+        { label: 'Write', data: [], borderColor: 'rgba(54, 162, 235, 1)', borderWidth: 1, fill: false }
+    ];
+    netChart.data.datasets = [
+        { label: 'Received', data: [], borderColor: 'rgba(255, 206, 86, 1)', borderWidth: 1, fill: false },
+        { label: 'Transmitted', data: [], borderColor: 'rgba(153, 102, 255, 1)', borderWidth: 1, fill: false }
+    ];
+
+    function addData(chart, label, data) {
+        chart.data.labels.push(label);
+        if (Array.isArray(data)) {
+            data.forEach((d, i) => chart.data.datasets[i].data.push(d));
+        } else {
+            chart.data.datasets[0].data.push(data);
+        }
+
+        if (chart.data.labels.length > MAX_DATA_POINTS) {
+            chart.data.labels.shift();
+            chart.data.datasets.forEach(dataset => dataset.data.shift());
+        }
+        chart.update();
+    }
+
+    async function updateCharts() {
+        try {
+            const response = await fetch(`/api/stats/{{ vm.uuid }}`);
+            const data = await response.json();
+            const now = new Date();
+
+            if (data.error) {
+                console.error(data.error);
+                return;
+            }
+
+            addData(cpuChart, now, data.cpu_usage);
+            addData(memChart, now, data.mem_used);
+            addData(diskChart, now, [data.disk_read, data.disk_write]);
+            addData(netChart, now, [data.net_rx, data.net_tx]);
+
+        } catch (error) {
+            console.error('Error fetching VM stats:', error);
+        }
+    }
+
+    setInterval(updateCharts, 2000);
+</script>
+{% endblock %}

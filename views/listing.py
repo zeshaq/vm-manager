@@ -1,6 +1,7 @@
 import libvirt
 import xml.etree.ElementTree as ET
-from flask import Blueprint, render_template, request, redirect, url_for, Response
+from flask import Blueprint, render_template, request, redirect, url_for, Response, jsonify
+import time
 
 listing_bp = Blueprint('listing', __name__)
 
@@ -624,3 +625,64 @@ def edit_vm(uuid):
     vm_data = {'uuid': dom.UUIDString(), 'name': dom.name(), 'ram': int(info[1] / 1024), 'cpu': info[3]}
     conn.close()
     return render_template('edit.html', vm=vm_data)
+
+@listing_bp.route('/monitor/<uuid>')
+def monitor_vm(uuid):
+    conn = get_db_connection()
+    vm_details = {}
+    if conn:
+        try:
+            dom = conn.lookupByUUIDString(uuid)
+            vm_details = {
+                'uuid': dom.UUIDString(),
+                'name': dom.name(),
+            }
+        except libvirt.libvirtError as e:
+            return f"Error: {e}"
+        finally:
+            conn.close()
+    return render_template('monitor.html', vm=vm_details)
+
+@listing_bp.route('/api/stats/<uuid>')
+def vm_stats(uuid):
+    conn = get_db_connection()
+    stats = {}
+    if conn:
+        try:
+            dom = conn.lookupByUUIDString(uuid)
+            if dom.isActive():
+                # Get CPU stats
+                t1 = time.time()
+                c1 = dom.info()[4]
+                time.sleep(1)
+                t2 = time.time()
+                c2 = dom.info()[4]
+                cpu_usage = (c2 - c1) * 100 / ((t2 - t1) * dom.info()[3] * 1e9)
+                
+                # Get memory stats
+                mem_stats = dom.memoryStats()
+                mem_used = mem_stats['actual'] / 1024
+                
+                # Get disk stats
+                disk_stats = dom.blockStats('vda')
+                disk_read_bytes = disk_stats[1]
+                disk_write_bytes = disk_stats[3]
+                
+                # Get network stats
+                net_stats = dom.interfaceStats('vnet0')
+                net_rx_bytes = net_stats[0]
+                net_tx_bytes = net_stats[4]
+                
+                stats = {
+                    'cpu_usage': cpu_usage,
+                    'mem_used': mem_used,
+                    'disk_read': disk_read_bytes,
+                    'disk_write': disk_write_bytes,
+                    'net_rx': net_rx_bytes,
+                    'net_tx': net_tx_bytes
+                }
+        except libvirt.libvirtError as e:
+            return jsonify({'error': str(e)})
+        finally:
+            conn.close()
+    return jsonify(stats)
