@@ -28,6 +28,10 @@
             <a href="/list">List VMs</a>
             <a href="/create">Create VM</a>
             <a href="/storage">Storage</a> <!-- NEW LINK -->
+            {% if session['username'] %}
+                <span style="color: #ddd; margin-left: auto;">Welcome, {{ session['username'] }}</span>
+                <a href="/logout" style="margin-left: 20px;">Logout</a>
+            {% endif %}
         </div>
     </header>
     
