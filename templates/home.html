@@ -7,5 +7,8 @@
     <div style="margin-top: 30px;">
         <a href="/list"><button>View Virtual Machines</button></a>
         <a href="/create"><button style="background-color: #28a745;">Create New VM</button></a>
+        <form action="/stop_all" method="post" style="display: inline;">
+            <button type="submit" style="background-color: #dc3545;">Stop All VMs</button>
+        </form>
     </div>
 {% endblock %}

@@ -10,3 +10,13 @@ done
 
     git config --global user.name "zahid"
     git config --global user.email zeshaq@gmail.com
+
+
+    nano /etc/default/grub
+    GRUB_CMDLINE_LINUX_DEFAULT="intel_iommu=on iommu=pt intremap=no_x2apic_optout"
+    update-grub
+    dmesg | grep -i "Intel-IOMMU"
+
+    lspci | grep -i nvidia
+lspci -nnk -s 04:00.0
+sudo apt install nvidia-driver-580-server

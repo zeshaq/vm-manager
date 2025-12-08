@@ -551,6 +551,22 @@ def stop_vm(uuid):
         finally: conn.close()
     return redirect(url_for('listing.view_vm', uuid=uuid))
 
+@listing_bp.route('/stop_all', methods=['POST'])
+def stop_all_vms():
+    conn = get_db_connection()
+    if conn:
+        try:
+            domains = conn.listAllDomains(0)
+            for domain in domains:
+                if domain.isActive():
+                    domain.destroy()
+        except libvirt.libvirtError as e:
+            print(f"Error stopping all VMs: {e}")
+        finally:
+            conn.close()
+    return redirect(url_for('listing.list_vms'))
+
+
 @listing_bp.route('/delete/<uuid>')
 def delete_vm(uuid):
     conn = get_db_connection()
