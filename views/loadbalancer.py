@@ -125,7 +125,7 @@ def generate_haproxy_config():
         subprocess.run(write_cmd, input=config_content.encode(), check=True, capture_output=True)
 
         # Reload HAProxy using systemctl
-        reload_cmd = ['sudo', 'systemctl', 'reload', 'haproxy']
+        reload_cmd = ['sudo', 'systemctl', 'restart', 'haproxy']
         subprocess.run(reload_cmd, check=True, capture_output=True)
         
         flash("HAProxy configuration updated and reloaded successfully.", "success")

@@ -11,10 +11,12 @@ def check_config_dirs():
     return os.path.isdir('/etc/vm-manager/haproxy')
 
 def check_sudo_permissions():
-    """Checks if the current user has passwordless sudo for the reload command."""
-    command = ['sudo', '-n', '/bin/systemctl', 'reload', 'haproxy']
+    """Checks if the current user has passwordless sudo for the restart command."""
+    command = ['sudo', '-n', '/bin/systemctl', 'restart', 'haproxy']
     try:
         result = subprocess.run(command, capture_output=True)
+        # We are checking if sudo is asking for a password.
+        # A password prompt typically returns 1 and mentions 'password'.
         return result.returncode != 1 or b'password' not in result.stderr.lower()
     except FileNotFoundError:
         return False

@@ -35,7 +35,7 @@ def setup_page():
     elif package_manager in ['dnf', 'yum']:
         install_command = f'sudo {package_manager} install -y haproxy'
 
-    sudoers_command = f"echo '{username} ALL=(ALL) NOPASSWD: /bin/systemctl reload haproxy' | sudo tee /etc/sudoers.d/vm-manager"
+    sudoers_command = f"echo '{username} ALL=(ALL) NOPASSWD: /bin/systemctl restart haproxy, /bin/systemctl reload haproxy' | sudo tee /etc/sudoers.d/vm-manager"
 
     # Perform all checks
     checks = {
@@ -53,9 +53,9 @@ def setup_page():
         },
         'sudo_permissions': {
             'pass': check_sudo_permissions(),
-            'message': 'Passwordless sudo for HAProxy reload is configured',
+            'message': 'Passwordless sudo for HAProxy management is configured',
             'fix_command': sudoers_command,
-            'fix_description': 'To grant the app permission to reload HAProxy, run this command:'
+            'fix_description': 'To grant the app permission to manage HAProxy, run this command:'
         }
     }
     
