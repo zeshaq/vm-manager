@@ -2,6 +2,7 @@ import libvirt
 import xml.etree.ElementTree as ET
 from flask import Blueprint, render_template, request, redirect, url_for, Response, jsonify
 import time
+from .audit import log_event
 
 listing_bp = Blueprint('listing', __name__)
 
@@ -546,8 +547,11 @@ def start_vm(uuid):
         try:
             dom = conn.lookupByUUIDString(uuid)
             dom.create()
-        except: pass
-        finally: conn.close()
+            log_event('VM Started', target_uuid=uuid, target_name=dom.name())
+        except libvirt.libvirtError as e:
+            print(f"Error starting VM: {e}")
+        finally:
+            conn.close()
     return redirect(url_for('listing.view_vm', uuid=uuid))
 
 @listing_bp.route('/stop/<uuid>')
@@ -556,9 +560,13 @@ def stop_vm(uuid):
     if conn:
         try:
             dom = conn.lookupByUUIDString(uuid)
-            if dom.isActive(): dom.destroy()
-        except: pass
-        finally: conn.close()
+            if dom.isActive():
+                dom.destroy()
+                log_event('VM Stopped', target_uuid=uuid, target_name=dom.name())
+        except libvirt.libvirtError as e:
+            print(f"Error stopping VM: {e}")
+        finally:
+            conn.close()
     return redirect(url_for('listing.view_vm', uuid=uuid))
 
 @listing_bp.route('/stop_all', methods=['POST'])
@@ -570,12 +578,12 @@ def stop_all_vms():
             for domain in domains:
                 if domain.isActive():
                     domain.destroy()
+                    log_event('VM Stopped', target_uuid=domain.UUIDString(), target_name=domain.name(), details="Part of Stop All")
         except libvirt.libvirtError as e:
             print(f"Error stopping all VMs: {e}")
         finally:
             conn.close()
     return redirect(url_for('listing.list_vms'))
-
 
 @listing_bp.route('/delete/<uuid>')
 def delete_vm(uuid):
@@ -583,10 +591,15 @@ def delete_vm(uuid):
     if conn:
         try:
             dom = conn.lookupByUUIDString(uuid)
-            if dom.isActive(): dom.destroy()
+            vm_name = dom.name()
+            if dom.isActive():
+                dom.destroy()
             dom.undefine()
-        except: pass
-        finally: conn.close()
+            log_event('VM Deleted', target_uuid=uuid, target_name=vm_name)
+        except libvirt.libvirtError as e:
+            print(f"Error deleting VM: {e}")
+        finally:
+            conn.close()
     return redirect(url_for('listing.list_vms'))
 
 @listing_bp.route('/console/<uuid>')
@@ -739,6 +752,7 @@ def create_snapshot(uuid):
             dom = conn.lookupByUUIDString(uuid)
             xml = f"<domainsnapshot><name>{snapshot_name}</name></domainsnapshot>"
             dom.snapshotCreateXML(xml, 0)
+            log_event('Snapshot Created', target_uuid=uuid, target_name=dom.name(), details=f"Snapshot: {snapshot_name}")
         except libvirt.libvirtError as e:
             return f"Error creating snapshot: {e}"
         finally:
@@ -754,6 +768,7 @@ def revert_snapshot(uuid):
             dom = conn.lookupByUUIDString(uuid)
             snapshot = dom.snapshotLookupByName(snapshot_name, 0)
             dom.revertToSnapshot(snapshot, 0)
+            log_event('Snapshot Reverted', target_uuid=uuid, target_name=dom.name(), details=f"Snapshot: {snapshot_name}")
         except libvirt.libvirtError as e:
             return f"Error reverting to snapshot: {e}"
         finally:
@@ -769,6 +784,7 @@ def delete_snapshot(uuid):
             dom = conn.lookupByUUIDString(uuid)
             snapshot = dom.snapshotLookupByName(snapshot_name, 0)
             snapshot.delete(0)
+            log_event('Snapshot Deleted', target_uuid=uuid, target_name=dom.name(), details=f"Snapshot: {snapshot_name}")
         except libvirt.libvirtError as e:
             return f"Error deleting snapshot: {e}"
         finally:

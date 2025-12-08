@@ -5,7 +5,10 @@ import os
 # Import the blueprints
 from views.listing import listing_bp
 from views.creation import creation_bp
-from views.storage import storage_bp  # <--- Import new blueprint
+from views.storage import storage_bp
+from views.audit import audit_bp
+from views.loadbalancer import lb_bp
+from views.setup import setup_bp
 
 app = Flask(__name__)
 app.secret_key = os.urandom(24)
@@ -13,7 +16,10 @@ app.secret_key = os.urandom(24)
 # Register the blueprints
 app.register_blueprint(listing_bp)
 app.register_blueprint(creation_bp)
-app.register_blueprint(storage_bp)    # <--- Register new blueprint
+app.register_blueprint(storage_bp)
+app.register_blueprint(audit_bp)
+app.register_blueprint(lb_bp)
+app.register_blueprint(setup_bp)
 
 @app.before_request
 def before_request():
