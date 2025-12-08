@@ -52,12 +52,15 @@ def get_vm_ip(vm_uuid):
             conn.close()
     return None
 
+def pre_flight_checks_passed():
+    """Runs all setup checks and returns True if all pass."""
+    return all([check_haproxy_installed(), check_config_dirs(), check_sudo_permissions()])
+
 def generate_haproxy_config():
-    """Generates a new haproxy.cfg from the routes and reloads the service."""
-    # --- Pre-flight checks ---
-    if not all([check_haproxy_installed(), check_config_dirs(), check_sudo_permissions()]):
-        flash("Setup is incomplete. Please resolve all issues on the Setup page before managing routes.", "error")
-        return redirect(url_for('setup.setup_page'))
+    """Generates a new haproxy.cfg from the routes and reloads the service. Returns True on success."""
+    if not pre_flight_checks_passed():
+        flash("Setup is incomplete. Please resolve all issues on the Setup page.", "error")
+        return False
 
     routes = read_routes()
     
@@ -131,13 +134,16 @@ def generate_haproxy_config():
 
         # Reload HAProxy using systemctl
         reload_cmd = ['sudo', 'systemctl', 'reload', 'haproxy']
-        subprocess.run(reload_cmd, check=True)
+        subprocess.run(reload_cmd, check=True, capture_output=True)
         
         flash("HAProxy configuration updated and reloaded successfully.", "success")
+        return True
     except (IOError, subprocess.CalledProcessError) as e:
         error_msg = e.stderr.decode() if hasattr(e, 'stderr') else str(e)
         flash(f"Error updating HAProxy: {error_msg}", "error")
         print(f"❌ Error updating HAProxy: {error_msg}")
+        return False
+
 
 
 # --- Routes ---

@@ -54,10 +54,22 @@
         </tbody>
     </table>
     
-    <div style="margin-top: 30px; text-align: center;">
+    <div style="margin-top: 30px; text-align: center; border-top: 2px solid #eee; padding-top: 20px;">
         <a href="{{ url_for('setup.setup_page') }}"><button>Re-run Checks</button></a>
-        <a href="{{ url_for('loadbalancer.manage_loadbalancer') }}"><button style="background: #007bff;">Back to Load Balancer</button></a>
+        <a href="{{ url_for('loadbalancer.manage_loadbalancer') }}"><button style="background: #6c757d;">Back to Load Balancer</button></a>
     </div>
+
+    {% if all_passed %}
+    <div style="margin-top: 30px; border-top: 2px solid #eee; padding-top: 20px;">
+        <h3 style="color: #444;">Final Step: Initialization</h3>
+        <p>All prerequisites are met. The final step is to create the initial HAProxy configuration file and start the service.</p>
+        <div style="text-align: center;">
+            <a href="{{ url_for('setup.initialize_haproxy') }}">
+                <button style="background: #28a745; font-size: 1.1em; padding: 12px 25px;">Initialize & Start HAProxy</button>
+            </a>
+        </div>
+    </div>
+    {% endif %}
 
 </div>
 {% endblock %}

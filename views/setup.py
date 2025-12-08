@@ -1,11 +1,13 @@
-from flask import Blueprint, render_template
+from flask import Blueprint, render_template, redirect, url_for, flash
 import shutil
 import os
 import subprocess
 import getpass
+from .loadbalancer import generate_haproxy_config
 
 # --- Blueprint Setup ---
 setup_bp = Blueprint('setup', __name__)
+
 
 # --- Helper Functions ---
 
@@ -83,3 +85,12 @@ def setup_page():
     all_passed = all(c['pass'] for c in checks.values())
 
     return render_template('setup.html', checks=checks, all_passed=all_passed)
+
+@setup_bp.route('/setup/initialize')
+def initialize_haproxy():
+    """Route to trigger the initial creation of the haproxy.cfg."""
+    # This function is imported from the loadbalancer blueprint.
+    # It already contains the necessary sudo commands and error handling.
+    generate_haproxy_config()
+    flash("Attempted to create initial HAProxy configuration and reload the service.", "success")
+    return redirect(url_for('setup.setup_page'))
