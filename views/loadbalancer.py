@@ -4,7 +4,6 @@ import libvirt
 import os
 import subprocess
 import requests
-from .setup import check_haproxy_installed, check_config_dirs, check_sudo_permissions
 
 # --- Blueprint Setup ---
 lb_bp = Blueprint('loadbalancer', __name__)
@@ -52,16 +51,8 @@ def get_vm_ip(vm_uuid):
             conn.close()
     return None
 
-def pre_flight_checks_passed():
-    """Runs all setup checks and returns True if all pass."""
-    return all([check_haproxy_installed(), check_config_dirs(), check_sudo_permissions()])
-
 def generate_haproxy_config():
     """Generates a new haproxy.cfg from the routes and reloads the service. Returns True on success."""
-    if not pre_flight_checks_passed():
-        flash("Setup is incomplete. Please resolve all issues on the Setup page.", "error")
-        return False
-
     routes = read_routes()
     
     # --- Base HAProxy Config ---
@@ -143,6 +134,7 @@ def generate_haproxy_config():
         flash(f"Error updating HAProxy: {error_msg}", "error")
         print(f"❌ Error updating HAProxy: {error_msg}")
         return False
+
 
 
 
