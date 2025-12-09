@@ -133,31 +133,59 @@ def get_host_gpus():
 
     return gpus
 
-@listing_bp.route('/list')
+@listing_bp.route('/list', methods=['GET', 'POST'])
 def list_vms():
-    vms_list = []
     conn = get_db_connection()
-    if conn:
-        try:
-            domains = conn.listAllDomains(0)
-            for domain in domains:
-                info = domain.info()
-                vms_list.append({
-                    'uuid': domain.UUIDString(),
-                    'name': domain.name(),
-                    'state': get_vm_state_string(info[0]),
-                    'state_code': info[0],
-                    'memory_mb': int(info[1] / 1024),
-                    'vcpus': info[3]
-                })
-            
-            # SORT LIST ALPHABETICALLY BY NAME
-            vms_list.sort(key=lambda x: x['name'])
+    if not conn:
+        return "Error connecting to hypervisor"
 
-        except libvirt.libvirtError as e:
-            print(f"Error: {e}")
-        finally:
-            conn.close()
+    if request.method == 'POST':
+        uuids = request.form.getlist('vm_uuids')
+        action = request.form.get('action')
+
+        for uuid in uuids:
+            try:
+                dom = conn.lookupByUUIDString(uuid)
+                if action == 'start':
+                    if not dom.isActive():
+                        dom.create()
+                        log_event('VM Started', target_uuid=uuid, target_name=dom.name())
+                elif action == 'stop':
+                    if dom.isActive():
+                        dom.destroy()
+                        log_event('VM Stopped', target_uuid=uuid, target_name=dom.name())
+                elif action == 'delete':
+                    vm_name = dom.name()
+                    if dom.isActive():
+                        dom.destroy()
+                    dom.undefine()
+                    log_event('VM Deleted', target_uuid=uuid, target_name=vm_name)
+            except libvirt.libvirtError as e:
+                print(f"Error performing action {action} on VM {uuid}: {e}")
+        
+        conn.close()
+        return redirect(url_for('listing.list_vms'))
+
+    # GET request logic remains the same
+    vms_list = []
+    try:
+        domains = conn.listAllDomains(0)
+        for domain in domains:
+            info = domain.info()
+            vms_list.append({
+                'uuid': domain.UUIDString(),
+                'name': domain.name(),
+                'state': get_vm_state_string(info[0]),
+                'state_code': info[0],
+                'memory_mb': int(info[1] / 1024),
+                'vcpus': info[3]
+            })
+        vms_list.sort(key=lambda x: x['name'])
+    except libvirt.libvirtError as e:
+        print(f"Error: {e}")
+    finally:
+        conn.close()
+
     return render_template('list.html', vms=vms_list)
 
 # --- VIEW & PARSING LOGIC ---
@@ -323,11 +351,32 @@ def add_disk(uuid):
         try:
             dom = conn.lookupByUUIDString(uuid)
             file_path = request.form['file_path']
-            target_dev = request.form['target_dev']
             
-            # AUTO-DETECT ISO vs DISK
+            # --- AUTO-DETERMINE TARGET DEVICE ---
+            xml_str = dom.XMLDesc(libvirt.VIR_DOMAIN_XML_INACTIVE)
+            tree = ET.fromstring(xml_str)
+            
+            existing_devs = set()
+            for disk in tree.findall('devices/disk'):
+                target = disk.find('target')
+                if target is not None:
+                    existing_devs.add(target.get('dev'))
+
+            # AUTO-DETECT ISO vs DISK & Set Prefix
             is_iso = file_path.lower().endswith('.iso')
+            prefix = 'sd' if is_iso else 'vd'
+
+            target_dev = ''
+            for letter in 'abcdefghijklmnopqrstuvwxyz':
+                dev_name = f"{prefix}{letter}"
+                if dev_name not in existing_devs:
+                    target_dev = dev_name
+                    break
             
+            if not target_dev:
+                raise Exception("No available disk device names left.")
+            # --- END AUTO-DETERMINE ---
+
             if is_iso:
                 xml = f"""
                 <disk type='file' device='cdrom'>

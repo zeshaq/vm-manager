@@ -6,64 +6,83 @@
         <a href="/create"><button style="background: #28a745;">+ New VM</button></a>
     </div>
 
-    <table>
-        <thead>
-            <tr>
-                <th>Name</th>
-                <th>State</th>
-                <th>Memory</th>
-                <th>vCPUs</th>
-                <th>Actions</th>
-            </tr>
-        </thead>
-        <tbody>
-            {% for vm in vms %}
-            <tr>
-<td>
-    <a href="{{ url_for('listing.view_vm', uuid=vm.uuid) }}" style="text-decoration: none; color: #007bff;">
-        <strong style="font-size: 1.1em;">{{ vm.name }}</strong>
-    </a>
-    <br>
-    <small style="color:#888">{{ vm.uuid }}</small>
-</td>
-                <td>
-                    {% if vm.state_code == 1 %}
-                        <span style="color:green; font-weight:bold;">● Running</span>
-                    {% elif vm.state_code == 5 %}
-                        <span style="color:red;">● Off</span>
-                    {% else %}
-                        <span>{{ vm.state }}</span>
-                    {% endif %}
-                </td>
-                <td>{{ vm.memory_mb }} MB</td>
-                <td>{{ vm.vcpus }}</td>
-                <td>
-                    {% if vm.state_code == 1 %}
-                        <a href="{{ url_for('listing.console_vm', uuid=vm.uuid) }}">
-                            <button style="background:#343a40; padding:5px 10px; font-size:12px;">Console</button>
-                        </a>
-                    {% else %}
-                        <button style="background:#e9ecef; color:#adb5bd; padding:5px 10px; font-size:12px; cursor: not-allowed;" disabled>Console</button>
-                    {% endif %}
+    <form method="POST" id="vm-action-form">
+        <div style="margin-bottom: 10px;">
+            <button type="submit" name="action" value="start" style="background: #28a745; color: white; border: none; padding: 10px 20px; border-radius: 5px; cursor: pointer;">Start Selected</button>
+            <button type="submit" name="action" value="stop" style="background: #dc3545; color: white; border: none; padding: 10px 20px; border-radius: 5px; cursor: pointer;">Stop Selected</button>
+            <button type="submit" name="action" value="delete" onclick="return confirm('Are you sure you want to delete the selected VMs?');" style="background: #6c757d; color: white; border: none; padding: 10px 20px; border-radius: 5px; cursor: pointer;">Delete Selected</button>
+        </div>
 
-                    {% if vm.state_code == 5 %}
-                        <a href="{{ url_for('listing.start_vm', uuid=vm.uuid) }}">
-                            <button style="background:#28a745; padding:5px 10px; font-size:12px;">Start</button>
+        <table>
+            <thead>
+                <tr>
+                    <th><input type="checkbox" id="select-all"></th>
+                    <th>Name</th>
+                    <th>State</th>
+                    <th>Memory</th>
+                    <th>vCPUs</th>
+                    <th>Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for vm in vms %}
+                <tr>
+                    <td><input type="checkbox" name="vm_uuids" value="{{ vm.uuid }}"></td>
+                    <td>
+                        <a href="{{ url_for('listing.view_vm', uuid=vm.uuid) }}" style="text-decoration: none; color: #007bff;">
+                            <strong style="font-size: 1.1em;">{{ vm.name }}</strong>
                         </a>
-                    {% else %}
-                        <a href="{{ url_for('listing.stop_vm', uuid=vm.uuid) }}" onclick="return confirm('Force Power Off?');">
-                            <button style="background:#dc3545; padding:5px 10px; font-size:12px;">Stop</button>
+                        <br>
+                        <small style="color:#888">{{ vm.uuid }}</small>
+                    </td>
+                    <td>
+                        {% if vm.state_code == 1 %}
+                            <span style="color:green; font-weight:bold;">● Running</span>
+                        {% elif vm.state_code == 5 %}
+                            <span style="color:red;">● Off</span>
+                        {% else %}
+                            <span>{{ vm.state }}</span>
+                        {% endif %}
+                    </td>
+                    <td>{{ vm.memory_mb }} MB</td>
+                    <td>{{ vm.vcpus }}</td>
+                    <td>
+                        {% if vm.state_code == 1 %}
+                            <a href="{{ url_for('listing.console_vm', uuid=vm.uuid) }}">
+                                <button type="button" style="background:#343a40; padding:5px 10px; font-size:12px;">Console</button>
+                            </a>
+                        {% else %}
+                            <button style="background:#e9ecef; color:#adb5bd; padding:5px 10px; font-size:12px; cursor: not-allowed;" disabled>Console</button>
+                        {% endif %}
+    
+                        {% if vm.state_code == 5 %}
+                            <a href="{{ url_for('listing.start_vm', uuid=vm.uuid) }}">
+                                <button type="button" style="background:#28a745; padding:5px 10px; font-size:12px;">Start</button>
+                            </a>
+                        {% else %}
+                            <a href="{{ url_for('listing.stop_vm', uuid=vm.uuid) }}" onclick="return confirm('Force Power Off?');">
+                                <button type="button" style="background:#dc3545; padding:5px 10px; font-size:12px;">Stop</button>
+                            </a>
+                        {% endif %}
+    
+                        <a href="{{ url_for('listing.delete_vm', uuid=vm.uuid) }}" onclick="return confirm('Delete this VM?');">
+                            <button type="button" style="background:#6c757d; padding:5px 10px; font-size:12px;">Delete</button>
                         </a>
-                    {% endif %}
+                    </td>
+                </tr>
+                {% else %}
+                <tr><td colspan="6" style="text-align:center;">No VMs found.</td></tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </form>
 
-                    <a href="{{ url_for('listing.delete_vm', uuid=vm.uuid) }}" onclick="return confirm('Delete this VM?');">
-                        <button style="background:#6c757d; padding:5px 10px; font-size:12px;">Delete</button>
-                    </a>
-                </td>
-            </tr>
-            {% else %}
-            <tr><td colspan="5" style="text-align:center;">No VMs found.</td></tr>
-            {% endfor %}
-        </tbody>
-    </table>
+    <script>
+        document.getElementById('select-all').onclick = function() {
+            var checkboxes = document.getElementsByName('vm_uuids');
+            for (var checkbox of checkboxes) {
+                checkbox.checked = this.checked;
+            }
+        }
+    </script>
 {% endblock %}

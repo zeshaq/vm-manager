@@ -135,7 +135,6 @@
         <form action="{{ url_for('listing.add_disk', uuid=vm.uuid) }}" method="POST" style="background:#f1f1f1; padding:15px; margin-top:15px; border-radius:5px; display:flex; align-items:center; gap:10px;">
             <strong style="color:#555; font-size:0.9em;">Attach:</strong>
             <input type="text" name="file_path" placeholder="/var/lib/libvirt/images/disk.qcow2" required style="padding:6px; border:1px solid #ccc; border-radius:4px; flex-grow:1;">
-            <input type="text" name="target_dev" placeholder="vdb" required style="padding:6px; border:1px solid #ccc; border-radius:4px; width:80px;">
             <button type="submit" style="background:#28a745; color:white; border:none; padding:6px 12px; border-radius:4px; cursor:pointer;">+ Add</button>
         </form>
     </div>
