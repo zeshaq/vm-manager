@@ -36,7 +36,6 @@ def terminal():
         return "Missing vm_name parameter", 400
     return render_template('novnc.html', vm_name=vm_name)
 
-from threading import Thread
 @sock.route('/vnc')
 def vnc(ws):
     vm_name = request.args.get('vm_name')
@@ -55,7 +54,7 @@ def vnc(ws):
         
         def client_to_server():
             try:
-                while not ws.closed and target_socket.fileno() != -1:
+                while True:
                     data = ws.receive()
                     if data is None:
                         break
@@ -68,7 +67,7 @@ def vnc(ws):
 
         def server_to_client():
             try:
-                while not ws.closed and target_socket.fileno() != -1:
+                while True:
                     data = target_socket.recv(4096)
                     if not data:
                         break
@@ -76,8 +75,7 @@ def vnc(ws):
             except Exception as e:
                 print(f"Server-to-client loop for {vm_name} ended: {e}")
             finally:
-                if not ws.closed:
-                    ws.close()
+                ws.close()
         
         c2s_thread = Thread(target=client_to_server)
         s2c_thread = Thread(target=server_to_client)
@@ -88,12 +86,12 @@ def vnc(ws):
         c2s_thread.join()
         s2c_thread.join()
 
-    except ConnectionClosed:
-        print(f"WebSocket connection closed for {vm_name}")
     except Exception as e:
         print(f"Error proxying VNC for {vm_name}: {e}")
     finally:
         if target_socket and target_socket.fileno() != -1:
             target_socket.close()
-        if not ws.closed:
+        try:
             ws.close()
+        except ConnectionClosed:
+            pass
