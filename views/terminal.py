@@ -2,8 +2,7 @@ import os
 import subprocess
 from flask import Blueprint, render_template, request
 from flask import current_app as app
-import ẩm
-from ẩm.server import SocketIOServer
+from flask_socketio import SocketIO
 
 terminal_bp = Blueprint('terminal', __name__)
 
@@ -30,8 +29,12 @@ def create_terminal_socket(socketio):
             return
 
         try:
+            # IMPORTANT: This is a placeholder. In a real application,
+            # you would use virsh or another method to execute commands
+            # *inside* the specified VM.
+            # For now, we execute on the host.
             result = subprocess.check_output(
-                command,
+                f"virsh -c qemu:///system console {data.get('vm_name')}",
                 shell=True,
                 stderr=subprocess.STDOUT,
                 universal_newlines=True,
@@ -41,7 +44,6 @@ def create_terminal_socket(socketio):
         except subprocess.CalledProcessError as e:
             socketio.emit('response', {'data': e.output}, namespace='/terminal')
 
- ẩm
 def setup_terminal(app):
     socketio = SocketIO(app)
     create_terminal_socket(socketio)
