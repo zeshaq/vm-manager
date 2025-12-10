@@ -1,0 +1,76 @@
+{% extends 'base.html' %}
+
+{% block content %}
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.min.css" />
+<script src="https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.min.js"></script>
+
+<div class="card">
+    <div class="card-header d-flex justify-content-between align-items-center">
+        <h1 class="h4 mb-0">Host Terminal</h1>
+        <span id="status-indicator" class="badge bg-secondary">CONNECTING...</span>
+    </div>
+    <div class="card-body bg-dark p-0">
+        <div id="terminal"></div>
+    </div>
+</div>
+
+<script>
+    document.addEventListener('DOMContentLoaded', function () {
+        const terminalContainer = document.getElementById('terminal');
+        const statusIndicator = document.getElementById('status-indicator');
+        const term = new Terminal({
+            cursorBlink: true,
+            theme: {
+                background: '#212529',
+                foreground: '#dee2e6'
+            }
+        });
+        term.open(terminalContainer);
+
+        const protocol = (window.location.protocol === 'https:') ? 'wss://' : 'ws://';
+        const url = protocol + window.location.host + '/host-ws';
+        const ws = new WebSocket(url);
+
+        ws.onopen = function () {
+            statusIndicator.textContent = 'CONNECTED';
+            statusIndicator.classList.remove('bg-secondary', 'bg-danger');
+            statusIndicator.classList.add('bg-success');
+            term.focus();
+        };
+
+        ws.onmessage = function (event) {
+            term.write(event.data);
+        };
+
+        ws.onclose = function () {
+            statusIndicator.textContent = 'DISCONNECTED';
+            statusIndicator.classList.remove('bg-success');
+            statusIndicator.classList.add('bg-danger');
+            term.write('\r\n\nConnection closed.');
+        };
+
+        term.onData(function (data) {
+            if (ws.readyState === WebSocket.OPEN) {
+                ws.send(data);
+            }
+        });
+
+        // Fit terminal to container
+        function fitTerminal() {
+            // This is a simplified fit addon logic. For perfect results,
+            // you might want to use the official xterm-addon-fit.
+            const parent = terminalContainer.parentElement;
+            const dims = term.proposeDimensions();
+            if (dims && parent) {
+                const cols = dims.cols;
+                const rows = Math.floor(parent.clientHeight / 17); // Approximate row height
+                term.resize(cols, rows);
+            }
+        }
+        
+        // Initial fit and resize on window change
+        fitTerminal();
+        window.addEventListener('resize', fitTerminal);
+    });
+</script>
+{% endblock %}
