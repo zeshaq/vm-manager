@@ -1,315 +1,238 @@
 {% extends 'base.html' %}
 
 {% block content %}
-<div style="background: white; padding: 30px; border-radius: 8px; box-shadow: 0 2px 5px rgba(0,0,0,0.1);">
+<div class="card">
+    <div class="card-body">
     
-    <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 2px solid #eee; padding-bottom: 20px; margin-bottom: 20px;">
-        <div>
-            <a href="/list" style="text-decoration: none; color: #666;">← Back to List</a>
-            <h1 style="margin: 10px 0 5px 0;">{{ vm.name }}</h1>
-            <span style="background: #eee; padding: 2px 8px; border-radius: 4px; font-size: 0.8em; color: #555;">{{ vm.uuid }}</span>
-        </div>
-        
-        <div>
-            {% if vm.state_code == 1 %}
-                <span style="background: #d4edda; color: #155724; padding: 10px 20px; border-radius: 20px; font-weight: bold;">Running</span>
-            {% else %}
-                <span style="background: #f8d7da; color: #721c24; padding: 10px 20px; border-radius: 20px; font-weight: bold;">{{ vm.state }}</span>
-            {% endif %}
-        </div>
-    </div>
-
-    <div style="margin-bottom: 30px;">
-        <h3 style="color: #444; border-bottom: 1px solid #eee; padding-bottom: 10px;">Resources</h3>
-        <table style="width: 100%; border: none; max-width: 400px;">
-            <tr>
-                <td style="padding: 8px 0; border-bottom: 1px solid #eee; width: 120px;"><strong>vCPUs:</strong></td>
-                <td style="border-bottom: 1px solid #eee;">{{ vm.vcpus }}</td>
-            </tr>
-            <tr>
-                <td style="padding: 8px 0; border-bottom: 1px solid #eee;"><strong>Memory:</strong></td>
-                <td style="border-bottom: 1px solid #eee;">{{ vm.memory_mb }} MB</td>
-            </tr>
-        </table>
-    </div>
-    
-    <div style="margin-bottom: 40px;">
-        <h3 style="color: #444; border-bottom: 1px solid #eee; padding-bottom: 10px;">Boot Configuration</h3>
-        
-        <div style="display: flex; gap: 20px; align-items: stretch;">
-            
-            <div style="flex: 1; background: #f1f8ff; border: 1px solid #cce5ff; padding: 20px; border-radius: 6px;">
-                <strong style="color: #004085; display: block; margin-bottom: 10px; font-size: 1em; text-transform: uppercase; letter-spacing: 0.5px;">Current Boot Order</strong>
-                <ol style="margin: 0; padding-left: 20px; color: #333; line-height: 1.6;">
-                    <li style="margin-bottom: 5px;">
-                        <span style="font-weight: bold;">Priority 1:</span> 
-                        {% if vm.current_boot['1'] == 'network' %} Network (PXE)
-                        {% elif vm.current_boot['1'] and 'disk|' in vm.current_boot['1'] %} Disk ({{ vm.current_boot['1'].split('|')[1] }})
-                        {% elif vm.current_boot['1'] == 'hd_generic' %} Hard Disk (Generic)
-                        {% elif vm.current_boot['1'] == 'cdrom_generic' %} CD-ROM (Generic)
-                        {% else %} Not Set {% endif %}
-                    </li>
-                    <li>
-                        <span style="font-weight: bold;">Priority 2:</span>
-                        {% if vm.current_boot['2'] == 'network' %} Network (PXE)
-                        {% elif vm.current_boot['2'] and 'disk|' in vm.current_boot['2'] %} Disk ({{ vm.current_boot['2'].split('|')[1] }})
-                        {% elif vm.current_boot['2'] == 'hd_generic' %} Hard Disk (Generic)
-                        {% elif vm.current_boot['2'] == 'cdrom_generic' %} CD-ROM (Generic)
-                        {% else %} <em>None</em> {% endif %}
-                    </li>
-                </ol>
+        <div class="d-flex justify-content-between align-items-center border-bottom pb-3 mb-4">
+            <div>
+                <a href="/list" class="text-decoration-none text-muted">← Back to List</a>
+                <h1 class="mb-1 mt-2">{{ vm.name }}</h1>
+                <span class="badge bg-secondary">{{ vm.uuid }}</span>
             </div>
-
-            <div style="flex: 1; background: #f9f9f9; padding: 20px; border-radius: 6px; border: 1px solid #eee;">
-                <form action="{{ url_for('listing.update_boot_order', uuid=vm.uuid) }}" method="POST" style="display: flex; flex-direction: column; height: 100%;">
-                    
-                    <div style="margin-bottom: 15px;">
-                        <label style="font-size:0.85em; font-weight:bold; color: #555; display: block; margin-bottom: 5px;">1st Boot Device</label>
-                        <select name="boot1" style="padding: 8px; width: 100%; border: 1px solid #ccc; border-radius: 4px;">
-                            <option value="network" {% if vm.current_boot['1'] == 'network' %}selected{% endif %}>Network (PXE)</option>
-                            <option disabled>--- Disks ---</option>
-                            {% for disk in vm.disks %}
-                                {% set val = 'disk|' + disk.target %}
-                                <option value="{{ val }}" {% if vm.current_boot['1'] == val %}selected{% endif %}>
-                                    {{ disk.device|upper }} ({{ disk.target }}) - {{ disk.file.split('/')[-1] }}
-                                </option>
-                            {% endfor %}
-                            <option disabled>--- Legacy ---</option>
-                            <option value="hd_generic" {% if vm.current_boot['1'] == 'hd_generic' %}selected{% endif %}>Any Hard Disk</option>
-                            <option value="cdrom_generic" {% if vm.current_boot['1'] == 'cdrom_generic' %}selected{% endif %}>Any CD-ROM</option>
-                        </select>
-                    </div>
-
-                    <div style="margin-bottom: 15px;">
-                        <label style="font-size:0.85em; font-weight:bold; color: #555; display: block; margin-bottom: 5px;">2nd Boot Device</label>
-                        <select name="boot2" style="padding: 8px; width: 100%; border: 1px solid #ccc; border-radius: 4px;">
-                            <option value="none">None</option>
-                            <option value="network" {% if vm.current_boot['2'] == 'network' %}selected{% endif %}>Network (PXE)</option>
-                            <option disabled>--- Disks ---</option>
-                            {% for disk in vm.disks %}
-                                {% set val = 'disk|' + disk.target %}
-                                <option value="{{ val }}" {% if vm.current_boot['2'] == val %}selected{% endif %}>
-                                    {{ disk.device|upper }} ({{ disk.target }})
-                                </option>
-                            {% endfor %}
-                        </select>
-                    </div>
-
-                    <div style="margin-top: auto; display: flex; align-items: center; justify-content: space-between;">
-                        <div style="font-size:0.8em; color:#888;">* Applies on next restart</div>
-                        <button type="submit" style="background: #007bff; color:white; border:none; padding: 8px 20px; border-radius:4px; font-size:0.9em; cursor:pointer;">Save Changes</button>
-                    </div>
-                </form>
+            
+            <div>
+                {% if vm.state_code == 1 %}
+                    <span class="badge bg-success fs-6">Running</span>
+                {% else %}
+                    <span class="badge bg-danger fs-6">{{ vm.state }}</span>
+                {% endif %}
             </div>
         </div>
-    </div>
 
-    <div style="margin-bottom: 30px;">
-        <h3 style="color: #444;">Storage Devices</h3>
-        <table style="width: 100%; border-collapse: collapse; font-size: 0.9em; border: 1px solid #eee;">
-            <thead style="background: #f8f9fa;">
-                <tr>
-                    <th style="padding:10px; border-bottom:2px solid #ddd; text-align:left;">Device</th>
-                    <th style="padding:10px; border-bottom:2px solid #ddd; text-align:left;">Source</th>
-                    <th style="padding:10px; border-bottom:2px solid #ddd; text-align:left;">Type</th>
-                    <th style="padding:10px; border-bottom:2px solid #ddd; text-align:right;">Action</th>
-                </tr>
-            </thead>
-            <tbody>
-                {% for disk in vm.disks %}
-                <tr style="border-bottom: 1px solid #eee;">
-                    <td style="padding: 10px;"><strong>{{ disk.target }}</strong></td>
-                    <td style="padding: 10px; word-break:break-all;">{{ disk.file }}</td>
-                    <td style="padding: 10px;">{{ disk.device }}</td>
-                    <td style="padding: 10px; text-align: right;">
-                        <form action="{{ url_for('listing.delete_disk', uuid=vm.uuid) }}" method="POST" style="display:inline;">
-                            <input type="hidden" name="target_dev" value="{{ disk.target }}">
-                            <button type="submit" onclick="return confirm('Detach this disk?')" style="background:transparent; color:#dc3545; border:1px solid #dc3545; padding:4px 8px; border-radius:4px; font-size:0.8em; cursor:pointer;">Detach</button>
-                        </form>
-                    </td>
-                </tr>
-                {% endfor %}
-            </tbody>
-        </table>
-        
-        <form action="{{ url_for('listing.add_disk', uuid=vm.uuid) }}" method="POST" style="background:#f1f1f1; padding:15px; margin-top:15px; border-radius:5px; display:flex; align-items:center; gap:10px;">
-            <strong style="color:#555; font-size:0.9em;">Attach:</strong>
-            <input type="text" name="file_path" placeholder="/var/lib/libvirt/images/disk.qcow2" required style="padding:6px; border:1px solid #ccc; border-radius:4px; flex-grow:1;">
-            <button type="submit" style="background:#28a745; color:white; border:none; padding:6px 12px; border-radius:4px; cursor:pointer;">+ Add</button>
-        </form>
-    </div>
-
-    <div style="margin-bottom: 30px;">
-        <h3 style="color: #444;">Network Interfaces</h3>
-        <table style="width: 100%; border-collapse: collapse; font-size: 0.9em; border: 1px solid #eee;">
-            <thead style="background: #f8f9fa;">
-                <tr>
-                    <th style="padding:10px; border-bottom:2px solid #ddd; text-align:left;">Model</th>
-                    <th style="padding:10px; border-bottom:2px solid #ddd; text-align:left;">Type/Source</th>
-                    <th style="padding:10px; border-bottom:2px solid #ddd; text-align:left;">MAC</th>
-                    <th style="padding:10px; border-bottom:2px solid #ddd; text-align:left;">IP</th>
-                    <th style="padding:10px; border-bottom:2px solid #ddd; text-align:right;">Action</th>
-                </tr>
-            </thead>
-            <tbody>
-                {% if vm.interfaces %}
-                    {% for iface in vm.interfaces %}
-                    <tr style="border-bottom: 1px solid #eee;">
-                        <td style="padding: 10px;">{{ iface.model }}</td>
-                        <td style="padding: 10px;">
-                            <strong style="text-transform: capitalize;">{{ iface.type }}</strong>
-                            <span style="color:#666">→ {{ iface.network }}</span>
-                        </td>
-                        <td style="padding: 10px; font-family:monospace;">{{ iface.mac }}</td>
-                        <td style="padding: 10px;">{% for ip in iface.ips %}{{ ip }}<br>{% endfor %}</td>
-                        <td style="padding: 10px; text-align: right;">
-                            <form action="{{ url_for('listing.delete_interface', uuid=vm.uuid) }}" method="POST" style="display:inline;">
-                                <input type="hidden" name="mac" value="{{ iface.mac }}">
-                                <button type="submit" onclick="return confirm('Remove interface?')" style="background:transparent; color:#dc3545; border:1px solid #dc3545; padding:4px 8px; border-radius:4px; font-size:0.8em; cursor:pointer;">Remove</button>
-                            </form>
-                        </td>
-                    </tr>
-                    {% endfor %}
-                {% else %}
-                    <tr><td colspan="5" style="text-align:center; padding:15px; color:#777;">No interfaces found</td></tr>
-                {% endif %}
-            </tbody>
-        </table>
-        
-        <form action="{{ url_for('listing.add_interface', uuid=vm.uuid) }}" method="POST" style="background:#f1f1f1; padding:15px; margin-top:15px; border-radius:5px; display:flex; align-items:center; gap:10px;">
-            <strong style="color:#555; font-size:0.9em;">Add Net:</strong>
-            
-            <select name="mode" style="padding: 6px; border: 1px solid #ccc; border-radius: 4px; width: 140px; background:white;">
-                <option value="network">Virtual Network</option>
-                <option value="bridge">Host Bridge</option>
-            </select>
-            
-            <input type="text" name="source" placeholder="Name (e.g. default, br0)" value="default" required style="padding:6px; border:1px solid #ccc; border-radius:4px; flex-grow: 1;">
-            
-            <button type="submit" style="background:#28a745; color:white; border:none; padding:6px 12px; border-radius:4px; cursor:pointer;">+ Attach</button>
-        </form>
-    </div>
-
-    <div style="margin-bottom: 30px;">
-        <h3 style="color: #444;">GPU Passthrough</h3>
-        
-        <table style="width: 100%; border-collapse: collapse; font-size: 0.9em; border: 1px solid #eee;">
-            <thead style="background: #f8f9fa;">
-                <tr>
-                    <th style="padding:10px; border-bottom:2px solid #ddd; text-align:left;">Device Name</th>
-                    <th style="padding:10px; border-bottom:2px solid #ddd; text-align:left;">PCI Address</th>
-                    <th style="padding:10px; border-bottom:2px solid #ddd; text-align:right;">Action</th>
-                </tr>
-            </thead>
-            <tbody>
-                {% if vm.host_gpus %}
-                    {% for gpu in vm.host_gpus %}
-                    <tr style="border-bottom: 1px solid #eee;">
-                        <td style="padding: 10px;">
-                            <strong>{{ gpu.name }}</strong>
-                        </td>
-                        <td style="padding: 10px; font-family: monospace;">{{ gpu.pci_id }}</td>
-                        <td style="padding: 10px; text-align: right;">
-                            <form action="{{ url_for('listing.detach_gpu', uuid=vm.uuid) }}" method="POST" style="display:inline;">
-                                <input type="hidden" name="bus" value="{{ gpu.bus }}">
-                                <input type="hidden" name="slot" value="{{ gpu.slot }}">
-                                <input type="hidden" name="function" value="{{ gpu.function }}">
-                                <button type="submit" onclick="return confirm('Detach GPU? If the VM is running, this might crash the guest OS.')" 
-                                        style="background:transparent; color:#dc3545; border:1px solid #dc3545; padding:4px 8px; border-radius:4px; font-size:0.8em; cursor:pointer;">
-                                    Detach
-                                </button>
-                            </form>
-                        </td>
-                    </tr>
-                    {% endfor %}
-                {% else %}
-                    <tr><td colspan="3" style="text-align:center; padding:15px; color:#777;">No GPUs attached</td></tr>
-                {% endif %}
-            </tbody>
-        </table>
-        
-        <form action="{{ url_for('listing.attach_gpu', uuid=vm.uuid) }}" method="POST" style="background:#f1f1f1; padding:15px; margin-top:15px; border-radius:5px; display:flex; align-items:center; gap:10px;">
-            <strong style="color:#555; font-size:0.9em;">Attach Host GPU:</strong>
-            
-            <select name="pci_id" style="padding: 6px; border: 1px solid #ccc; border-radius: 4px; flex-grow: 1; background:white;">
-                <option value="" disabled selected>Select an NVIDIA GPU...</option>
-                {% for host_gpu in vm.available_gpus %}
-                    <option value="{{ host_gpu.pci_id }}">
-                        {{ host_gpu.name }} ({{ host_gpu.pci_id }})
-                    </option>
-                {% endfor %}
-            </select>
-            
-            <button type="submit" style="background:#6f42c1; color:white; border:none; padding:6px 12px; border-radius:4px; cursor:pointer;">
-                + Attach GPU
-            </button>
-        </form>
-        <div style="font-size: 0.8em; color: #888; margin-top: 5px;">
-            * Ensure Host IOMMU is enabled. Attaching a GPU used by the host display may crash the server.
+        <div class="row">
+            <div class="col-md-6">
+                <div class="mb-4">
+                    <h3 class="h5">Resources</h3>
+                    <table class="table table-sm table-bordered" style="max-width: 400px;">
+                        <tbody>
+                            <tr>
+                                <th style="width: 120px;">vCPUs:</th>
+                                <td>{{ vm.vcpus }}</td>
+                            </tr>
+                            <tr>
+                                <th>Memory:</th>
+                                <td>{{ vm.memory_mb }} MB</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+            <div class="col-md-6">
+                <div class="card bg-light">
+                    <div class="card-body">
+                        <h5 class="card-title">Actions</h5>
+                        {% if vm.state_code == 1 %}
+                            <a href="{{ url_for('listing.console_vm', uuid=vm.uuid) }}" class="btn btn-dark">Open Console</a>
+                            <a href="{{ url_for('listing.stop_vm', uuid=vm.uuid) }}" onclick="return confirm('Force Stop?');" class="btn btn-danger">Stop VM</a>
+                            <a href="{{ url_for('listing.monitor_vm', uuid=vm.uuid) }}" class="btn btn-info">Live Monitor</a>
+                        {% else %}
+                            <a href="{{ url_for('listing.start_vm', uuid=vm.uuid) }}" class="btn btn-success">Start VM</a>
+                        {% endif %}
+                        <a href="{{ url_for('listing.edit_vm', uuid=vm.uuid) }}" class="btn btn-warning">Edit Resources</a>
+                        <a href="{{ url_for('listing.delete_vm', uuid=vm.uuid) }}" onclick="return confirm('Delete permanently?');" class="btn btn-secondary">Delete VM</a>
+                    </div>
+                </div>
+            </div>
         </div>
-    </div>
-
-    <!-- Snapshot Management -->
-    <div style="margin-bottom: 30px;">
-        <h3 style="color: #444;">Snapshots</h3>
-        <table style="width: 100%; border-collapse: collapse; font-size: 0.9em; border: 1px solid #eee;">
-            <thead style="background: #f8f9fa;">
-                <tr>
-                    <th style="padding:10px; border-bottom:2px solid #ddd; text-align:left;">Snapshot Name</th>
-                    <th style="padding:10px; border-bottom:2px solid #ddd; text-align:right;">Actions</th>
-                </tr>
-            </thead>
-            <tbody>
-                {% for snapshot in vm.snapshots %}
-                <tr style="border-bottom: 1px solid #eee;">
-                    <td style="padding: 10px;"><strong>{{ snapshot.name }}</strong></td>
-                    <td style="padding: 10px; text-align: right;">
-                        <form action="{{ url_for('listing.revert_snapshot', uuid=vm.uuid) }}" method="POST" style="display:inline;">
-                            <input type="hidden" name="snapshot_name" value="{{ snapshot.name }}">
-                            <button type="submit" onclick="return confirm('Revert to this snapshot? The current state will be lost.')" 
-                                    style="background:transparent; color:#ffc107; border:1px solid #ffc107; padding:4px 8px; border-radius:4px; font-size:0.8em; cursor:pointer;">
-                                Revert
-                            </button>
-                        </form>
-                        <form action="{{ url_for('listing.delete_snapshot', uuid=vm.uuid) }}" method="POST" style="display:inline; margin-left: 5px;">
-                            <input type="hidden" name="snapshot_name" value="{{ snapshot.name }}">
-                            <button type="submit" onclick="return confirm('Delete this snapshot permanently?')" 
-                                    style="background:transparent; color:#dc3545; border:1px solid #dc3545; padding:4px 8px; border-radius:4px; font-size:0.8em; cursor:pointer;">
-                                Delete
-                            </button>
-                        </form>
-                    </td>
-                </tr>
-                {% else %}
-                <tr><td colspan="2" style="text-align:center; padding:15px; color:#777;">No snapshots found</td></tr>
-                {% endfor %}
-            </tbody>
-        </table>
         
-        <form action="{{ url_for('listing.create_snapshot', uuid=vm.uuid) }}" method="POST" style="background:#f1f1f1; padding:15px; margin-top:15px; border-radius:5px; display:flex; align-items:center; gap:10px;">
-            <strong style="color:#555; font-size:0.9em;">Create New Snapshot:</strong>
-            <input type="text" name="snapshot_name" placeholder="e.g., before-update" required style="padding:6px; border:1px solid #ccc; border-radius:4px; flex-grow:1;">
-            <button type="submit" style="background:#28a745; color:white; border:none; padding:6px 12px; border-radius:4px; cursor:pointer;">+ Create</button>
-        </form>
-    </div>
+        <div class="mb-4">
+            <h3 class="h5">Boot Configuration</h3>
+            <div class="row">
+                <div class="col-md-6">
+                    <div class="card h-100">
+                        <div class="card-body">
+                            <h6 class="card-subtitle mb-2 text-muted">Current Boot Order</h6>
+                            <ol class="list-group list-group-numbered">
+                                <li class="list-group-item">
+                                    {% if vm.current_boot['1'] == 'network' %} Network (PXE)
+                                    {% elif vm.current_boot['1'] and 'disk|' in vm.current_boot['1'] %} Disk ({{ vm.current_boot['1'].split('|')[1] }})
+                                    {% elif vm.current_boot['1'] == 'hd_generic' %} Hard Disk (Generic)
+                                    {% elif vm.current_boot['1'] == 'cdrom_generic' %} CD-ROM (Generic)
+                                    {% else %} Not Set {% endif %}
+                                </li>
+                                <li class="list-group-item">
+                                    {% if vm.current_boot['2'] == 'network' %} Network (PXE)
+                                    {% elif vm.current_boot['2'] and 'disk|' in vm.current_boot['2'] %} Disk ({{ vm.current_boot['2'].split('|')[1] }})
+                                    {% elif vm.current_boot['2'] == 'hd_generic' %} Hard Disk (Generic)
+                                    {% elif vm.current_boot['2'] == 'cdrom_generic' %} CD-ROM (Generic)
+                                    {% else %} <em>None</em> {% endif %}
+                                </li>
+                            </ol>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-md-6">
+                    <div class="card h-100">
+                        <div class="card-body">
+                            <form action="{{ url_for('listing.update_boot_order', uuid=vm.uuid) }}" method="POST">
+                                <div class="mb-3">
+                                    <label for="boot1" class="form-label">1st Boot Device</label>
+                                    <select id="boot1" name="boot1" class="form-select">
+                                        <option value="network" {% if vm.current_boot['1'] == 'network' %}selected{% endif %}>Network (PXE)</option>
+                                        <optgroup label="Disks">
+                                            {% for disk in vm.disks %}
+                                                {% set val = 'disk|' + disk.target %}
+                                                <option value="{{ val }}" {% if vm.current_boot['1'] == val %}selected{% endif %}>
+                                                    {{ disk.device|upper }} ({{ disk.target }}) - {{ disk.file.split('/')[-1] }}
+                                                </option>
+                                            {% endfor %}
+                                        </optgroup>
+                                        <optgroup label="Legacy">
+                                            <option value="hd_generic" {% if vm.current_boot['1'] == 'hd_generic' %}selected{% endif %}>Any Hard Disk</option>
+                                            <option value="cdrom_generic" {% if vm.current_boot['1'] == 'cdrom_generic' %}selected{% endif %}>Any CD-ROM</option>
+                                        </optgroup>
+                                    </select>
+                                </div>
+                                <div class="mb-3">
+                                    <label for="boot2" class="form-label">2nd Boot Device</label>
+                                    <select id="boot2" name="boot2" class="form-select">
+                                        <option value="none">None</option>
+                                        <option value="network" {% if vm.current_boot['2'] == 'network' %}selected{% endif %}>Network (PXE)</option>
+                                        <optgroup label="Disks">
+                                            {% for disk in vm.disks %}
+                                                {% set val = 'disk|' + disk.target %}
+                                                <option value="{{ val }}" {% if vm.current_boot['2'] == val %}selected{% endif %}>
+                                                    {{ disk.device|upper }} ({{ disk.target }})
+                                                </option>
+                                            {% endfor %}
+                                        </optgroup>
+                                    </select>
+                                </div>
+                                <div class="d-flex justify-content-between align-items-center">
+                                    <small class="text-muted">* Applies on next restart</small>
+                                    <button type="submit" class="btn btn-primary btn-sm">Save Changes</button>
+                                </div>
+                            </form>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
 
-    <div style="background: #f8f9fa; padding: 20px; border-radius: 8px;">
-        <h3 style="margin-top: 0;">Actions</h3>
-        {% if vm.state_code == 1 %}
-            <a href="{{ url_for('listing.console_vm', uuid=vm.uuid) }}"><button style="background: #343a40; color:white; padding:10px 20px; border:none; border-radius:5px; cursor:pointer; margin-right:10px;">Open Console</button></a>
-            <a href="{{ url_for('listing.stop_vm', uuid=vm.uuid) }}" onclick="return confirm('Force Stop?');"><button style="background: #dc3545; color:white; padding:10px 20px; border:none; border-radius:5px; cursor:pointer;">Stop VM</button></a>
-            <a href="{{ url_for('listing.monitor_vm', uuid=vm.uuid) }}"><button style="background: #007bff; color:white; padding:10px 20px; border:none; border-radius:5px; cursor:pointer;">Live Monitor</button></a>
-        {% else %}
-            <a href="{{ url_for('listing.start_vm', uuid=vm.uuid) }}"><button style="background: #28a745; color:white; padding:10px 20px; border:none; border-radius:5px; cursor:pointer;">Start VM</button></a>
-        {% endif %}
-        
-        <a href="{{ url_for('listing.delete_vm', uuid=vm.uuid) }}" onclick="return confirm('Delete permanently?');" style="float: right;">
-            <button style="background: #6c757d; color:white; padding:10px 20px; border:none; border-radius:5px; cursor:pointer;">Delete VM</button>
-        </a>
-        <a href="{{ url_for('listing.edit_vm', uuid=vm.uuid) }}">
-            <button style="background: #ffc107; color: #212529; padding:10px 20px; border:none; border-radius:5px; cursor:pointer; margin-right: 10px;">Edit Resources</button>
-        </a>
+        <!-- Sections for Storage, Network, GPU, Snapshots -->
+        {% for section_title, items, columns, form_action, form_fields, form_button_text in [
+            ('Storage Devices', vm.disks, ['Device', 'Source', 'Type'], 'listing.add_disk', [('text', 'file_path', '/var/lib/libvirt/images/disk.qcow2')], '+ Add'),
+            ('Network Interfaces', vm.interfaces, ['Model', 'Type/Source', 'MAC', 'IP'], 'listing.add_interface', [('select', 'mode', {'network': 'Virtual Network', 'bridge': 'Host Bridge'}), ('text', 'source', 'default')], '+ Attach'),
+            ('GPU Passthrough', vm.host_gpus, ['Device Name', 'PCI Address'], 'listing.attach_gpu', [('select', 'pci_id', vm.available_gpus)], '+ Attach GPU'),
+            ('Snapshots', vm.snapshots, ['Snapshot Name'], 'listing.create_snapshot', [('text', 'snapshot_name', 'e.g., before-update')], '+ Create')
+        ] %}
+        <div class="mb-4">
+            <h3 class="h5">{{ section_title }}</h3>
+            <div class="table-responsive">
+                <table class="table table-striped table-bordered table-sm">
+                    <thead class="table-light">
+                        <tr>
+                            {% for col in columns %}
+                                <th>{{ col }}</th>
+                            {% endfor %}
+                            <th class="text-end">Action</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for item in items %}
+                        <tr>
+                            {% for col in columns %}
+                                <td>
+                                    {% if col == 'Device' or col == 'Device Name' %}<strong>{{ item.target or item.name }}</strong>{% endif %}
+                                    {% if col == 'Source' %}{{ item.file }}{% endif %}
+                                    {% if col == 'Type' %}{{ item.device }}{% endif %}
+                                    {% if col == 'Model' %}{{ item.model }}{% endif %}
+                                    {% if col == 'Type/Source' %}<strong>{{ item.type|capitalize }}</strong> → {{ item.network }}{% endif %}
+                                    {% if col == 'MAC' %}<span class="font-monospace">{{ item.mac }}</span>{% endif %}
+                                    {% if col == 'IP' %}{% for ip in item.ips %}{{ ip }}<br>{% endfor %}{% endif %}
+                                    {% if col == 'PCI Address' %}<span class="font-monospace">{{ item.pci_id }}</span>{% endif %}
+                                    {% if col == 'Snapshot Name' %}<strong>{{ item.name }}</strong>{% endif %}
+                                </td>
+                            {% endfor %}
+                            <td class="text-end">
+                                {% if section_title == 'Storage Devices' %}
+                                    <form action="{{ url_for('listing.delete_disk', uuid=vm.uuid) }}" method="POST" class="d-inline">
+                                        <input type="hidden" name="target_dev" value="{{ item.target }}">
+                                        <button type="submit" onclick="return confirm('Detach this disk?')" class="btn btn-outline-danger btn-sm">Detach</button>
+                                    </form>
+                                {% elif section_title == 'Network Interfaces' %}
+                                    <form action="{{ url_for('listing.delete_interface', uuid=vm.uuid) }}" method="POST" class="d-inline">
+                                        <input type="hidden" name="mac" value="{{ item.mac }}">
+                                        <button type="submit" onclick="return confirm('Remove interface?')" class="btn btn-outline-danger btn-sm">Remove</button>
+                                    </form>
+                                {% elif section_title == 'GPU Passthrough' %}
+                                    <form action="{{ url_for('listing.detach_gpu', uuid=vm.uuid) }}" method="POST" class="d-inline">
+                                        <input type="hidden" name="bus" value="{{ item.bus }}"><input type="hidden" name="slot" value="{{ item.slot }}"><input type="hidden" name="function" value="{{ item.function }}">
+                                        <button type="submit" onclick="return confirm('Detach GPU?')" class="btn btn-outline-danger btn-sm">Detach</button>
+                                    </form>
+                                {% elif section_title == 'Snapshots' %}
+                                    <form action="{{ url_for('listing.revert_snapshot', uuid=vm.uuid) }}" method="POST" class="d-inline">
+                                        <input type="hidden" name="snapshot_name" value="{{ item.name }}">
+                                        <button type="submit" onclick="return confirm('Revert to this snapshot?')" class="btn btn-outline-warning btn-sm">Revert</button>
+                                    </form>
+                                    <form action="{{ url_for('listing.delete_snapshot', uuid=vm.uuid) }}" method="POST" class="d-inline">
+                                        <input type="hidden" name="snapshot_name" value="{{ item.name }}">
+                                        <button type="submit" onclick="return confirm('Delete this snapshot?')" class="btn btn-outline-danger btn-sm">Delete</button>
+                                    </form>
+                                {% endif %}
+                            </td>
+                        </tr>
+                        {% else %}
+                        <tr><td colspan="{{ columns|length + 1 }}" class="text-center text-muted p-4">No {{ section_title.lower() }} found.</td></tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            
+            <form action="{{ url_for(form_action, uuid=vm.uuid) }}" method="POST" class="card bg-light mt-3">
+                <div class="card-body">
+                    <div class="row g-2 align-items-center">
+                        {% for field_type, field_name, field_placeholder in form_fields %}
+                            <div class="col">
+                            {% if field_type == 'text' %}
+                                <input type="text" name="{{ field_name }}" placeholder="{{ field_placeholder }}" required class="form-control form-control-sm">
+                            {% elif field_type == 'select' %}
+                                {% if field_name == 'pci_id' %}
+                                    <select name="{{ field_name }}" class="form-select form-select-sm">
+                                        <option value="" disabled selected>Select an NVIDIA GPU...</option>
+                                        {% for gpu in field_placeholder %}
+                                            <option value="{{ gpu.pci_id }}">{{ gpu.name }} ({{ gpu.pci_id }})</option>
+                                        {% endfor %}
+                                    </select>
+                                {% else %}
+                                    <select name="{{ field_name }}" class="form-select form-select-sm">
+                                    {% for value, text in field_placeholder.items() %}
+                                        <option value="{{ value }}">{{ text }}</option>
+                                    {% endfor %}
+                                    </select>
+                                {% endif %}
+                            {% endif %}
+                            </div>
+                        {% endfor %}
+                        <div class="col-auto">
+                            <button type="submit" class="btn btn-success btn-sm">{{ form_button_text }}</button>
+                        </div>
+                    </div>
+                </div>
+            </form>
+        </div>
+        {% endfor %}
     </div>
-
 </div>
 {% endblock %}

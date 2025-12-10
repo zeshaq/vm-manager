@@ -1,50 +1,45 @@
 {% extends 'base.html' %}
 
 {% block content %}
-<div style="background: white; padding: 30px; border-radius: 8px; box-shadow: 0 2px 5px rgba(0,0,0,0.1);">
+<div class="card">
+    <div class="card-body">
 
-    <!-- Page Header -->
-    <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 2px solid #eee; padding-bottom: 10px; margin-bottom: 20px;">
-        <div>
-            <h1>HAProxy Statistics</h1>
-            <p style="color: #666; margin: 0;">Live statistics for the integrated load balancer.</p>
+        <!-- Page Header -->
+        <div class="d-flex justify-content-between align-items-center border-bottom pb-2 mb-4">
+            <div>
+                <h1>HAProxy Statistics</h1>
+                <p class="text-muted">Live statistics for the integrated load balancer.</p>
+            </div>
+            <a href="{{ url_for('loadbalancer.manage_loadbalancer') }}" class="btn btn-primary">← Back to Routes</a>
         </div>
-        <a href="{{ url_for('loadbalancer.manage_loadbalancer') }}">
-            <button style="background: #007bff;">← Back to Routes</button>
-        </a>
+    
+        {% if error %}
+            <div class="alert alert-danger" role="alert">
+                <strong>Error:</strong> {{ error }}
+            </div>
+        {% else %}
+            <!-- HAProxy content will be injected here -->
+            <div class="haproxy-stats-container table-responsive">
+                {{ stats_content|safe }}
+            </div>
+        {% endif %}
+        
     </div>
-    
-    {% if error %}
-        <div style="padding: 15px; margin-bottom: 20px; border-radius: 4px; color: #721c24; background-color: #f8d7da; border: 1px solid #f5c6cb;">
-            <strong>Error:</strong> {{ error }}
-        </div>
-    {% else %}
-        <!-- HAProxy content will be injected here -->
-        <div class="haproxy-stats-container">
-            {{ stats_content|safe }}
-        </div>
-    {% endif %}
-    
 </div>
 
-<!-- Some basic styling to make the injected stats look better -->
-<style>
-    .haproxy-stats-container table {
-        width: 100%;
-        border-collapse: collapse;
-        font-size: 0.8em;
-        margin-top: 0;
+<script>
+document.addEventListener("DOMContentLoaded", function() {
+    const container = document.querySelector('.haproxy-stats-container');
+    if (container) {
+        const tables = container.querySelectorAll('table');
+        tables.forEach(table => {
+            table.classList.add('table', 'table-bordered', 'table-striped', 'table-sm');
+        });
+        const headers = container.querySelectorAll('h1');
+        headers.forEach(header => {
+            header.classList.add('h4');
+        });
     }
-    .haproxy-stats-container th,
-    .haproxy-stats-container td {
-        padding: 5px;
-        border: 1px solid #ccc;
-    }
-    .haproxy-stats-container th {
-        background-color: #f2f2f2;
-    }
-    .haproxy-stats-container h1 {
-        font-size: 1.2em;
-    }
-</style>
+});
+</script>
 {% endblock %}

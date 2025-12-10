@@ -1,75 +1,75 @@
 {% extends 'base.html' %}
 
 {% block content %}
-<div style="background: white; padding: 30px; border-radius: 8px; box-shadow: 0 2px 5px rgba(0,0,0,0.1);">
+<div class="card">
+    <div class="card-body">
 
-    <!-- Page Header -->
-    <div style="border-bottom: 2px solid #eee; padding-bottom: 10px; margin-bottom: 20px;">
-        <h1>Load Balancer Setup</h1>
-        <p style="color: #666; margin: 0;">Verify that the host environment is correctly configured for HAProxy.</p>
-    </div>
-
-    {% if all_passed %}
-        <div style="padding: 15px; margin-bottom: 20px; border-radius: 4px; color: #155724; background-color: #d4edda; border: 1px solid #c3e6cb;">
-            <strong>All checks passed!</strong> The load balancer is configured correctly.
+        <!-- Page Header -->
+        <div class="border-bottom pb-2 mb-4">
+            <h1>Load Balancer Setup</h1>
+            <p class="text-muted">Verify that the host environment is correctly configured for HAProxy.</p>
         </div>
-    {% else %}
-        <div style="padding: 15px; margin-bottom: 20px; border-radius: 4px; color: #721c24; background-color: #f8d7da; border: 1px solid #f5c6cb;">
-            <strong>Setup Required.</strong> Please follow the instructions below to complete the setup.
+
+        {% if all_passed %}
+            <div class="alert alert-success" role="alert">
+                <strong>All checks passed!</strong> The load balancer is configured correctly.
+            </div>
+        {% else %}
+            <div class="alert alert-danger" role="alert">
+                <strong>Setup Required.</strong> Please follow the instructions below to complete the setup.
+            </div>
+        {% endif %}
+
+        <!-- Checks Table -->
+        <table class="table table-bordered">
+            <thead class="table-light">
+                <tr>
+                    <th style="width: 80px;" class="text-center">Status</th>
+                    <th>Check</th>
+                    <th>Details</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for name, check in checks.items() %}
+                <tr>
+                    <td class="text-center">
+                        {% if check.pass %}
+                            <span class="fs-4 text-success">✓</span>
+                        {% else %}
+                            <span class="fs-4 text-danger">✗</span>
+                        {% endif %}
+                    </td>
+                    <td>
+                        <strong>{{ check.message }}</strong>
+                    </td>
+                    <td>
+                        {% if not check.pass %}
+                            <p>{{ check.fix_description }}</p>
+                            <pre class="bg-light p-2 rounded"><code>{{ check.fix_command }}</code></pre>
+                        {% else %}
+                            <span class="text-muted">OK</span>
+                        {% endif %}
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        
+        <div class="mt-4 text-center border-top pt-4">
+            <a href="{{ url_for('setup.setup_page') }}" class="btn btn-primary">Re-run Checks</a>
+            <a href="{{ url_for('loadbalancer.manage_loadbalancer') }}" class="btn btn-secondary">Back to Load Balancer</a>
         </div>
-    {% endif %}
 
-    <!-- Checks Table -->
-    <table style="width: 100%; border-collapse: collapse;">
-        <thead style="background: #f8f9fa;">
-            <tr>
-                <th style="padding: 12px; border-bottom: 2px solid #ddd; text-align: left; width: 50px;">Status</th>
-                <th style="padding: 12px; border-bottom: 2px solid #ddd; text-align: left;">Check</th>
-                <th style="padding: 12px; border-bottom: 2px solid #ddd; text-align: left;">Details</th>
-            </tr>
-        </thead>
-        <tbody>
-            {% for name, check in checks.items() %}
-            <tr style="border-bottom: 1px solid #eee;">
-                <td style="padding: 15px; text-align: center;">
-                    {% if check.pass %}
-                        <span style="font-size: 1.5em; color: #28a745;">✓</span>
-                    {% else %}
-                        <span style="font-size: 1.5em; color: #dc3545;">✗</span>
-                    {% endif %}
-                </td>
-                <td style="padding: 15px;">
-                    <strong>{{ check.message }}</strong>
-                </td>
-                <td style="padding: 15px;">
-                    {% if not check.pass %}
-                        <p style="margin: 0 0 10px 0;">{{ check.fix_description }}</p>
-                        <code style="display: block; background: #e9ecef; padding: 10px; border-radius: 4px; white-space: pre-wrap; word-wrap: break-word;">{{ check.fix_command }}</code>
-                    {% else %}
-                        <span style="color: #6c757d;">OK</span>
-                    {% endif %}
-                </td>
-            </tr>
-            {% endfor %}
-        </tbody>
-    </table>
-    
-    <div style="margin-top: 30px; text-align: center; border-top: 2px solid #eee; padding-top: 20px;">
-        <a href="{{ url_for('setup.setup_page') }}"><button>Re-run Checks</button></a>
-        <a href="{{ url_for('loadbalancer.manage_loadbalancer') }}"><button style="background: #6c757d;">Back to Load Balancer</button></a>
-    </div>
-
-    {% if all_passed %}
-    <div style="margin-top: 30px; border-top: 2px solid #eee; padding-top: 20px;">
-        <h3 style="color: #444;">Final Step: Initialization</h3>
-        <p>All prerequisites are met. The final step is to create the initial HAProxy configuration file and start the service.</p>
-        <div style="text-align: center;">
-            <a href="{{ url_for('setup.initialize_haproxy') }}">
-                <button style="background: #28a745; font-size: 1.1em; padding: 12px 25px;">Initialize & Start HAProxy</button>
-            </a>
+        {% if all_passed %}
+        <div class="mt-4 border-top pt-4">
+            <h3>Final Step: Initialization</h3>
+            <p>All prerequisites are met. The final step is to create the initial HAProxy configuration file and start the service.</p>
+            <div class="text-center">
+                <a href="{{ url_for('setup.initialize_haproxy') }}" class="btn btn-success btn-lg">Initialize & Start HAProxy</a>
+            </div>
         </div>
-    </div>
-    {% endif %}
+        {% endif %}
 
+    </div>
 </div>
 {% endblock %}

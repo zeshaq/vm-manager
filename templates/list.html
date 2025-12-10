@@ -1,20 +1,20 @@
 {% extends 'base.html' %}
 
 {% block content %}
-    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+    <div class="d-flex justify-content-between align-items-center mb-4">
         <h1>Virtual Machines</h1>
-        <a href="/create"><button style="background: #28a745;">+ New VM</button></a>
+        <a href="/create" class="btn btn-success">+ New VM</a>
     </div>
 
     <form method="POST" id="vm-action-form">
-        <div style="margin-bottom: 10px;">
-            <button type="submit" name="action" value="start" style="background: #28a745; color: white; border: none; padding: 10px 20px; border-radius: 5px; cursor: pointer;">Start Selected</button>
-            <button type="submit" name="action" value="stop" style="background: #dc3545; color: white; border: none; padding: 10px 20px; border-radius: 5px; cursor: pointer;">Stop Selected</button>
-            <button type="submit" name="action" value="delete" onclick="return confirm('Are you sure you want to delete the selected VMs?');" style="background: #6c757d; color: white; border: none; padding: 10px 20px; border-radius: 5px; cursor: pointer;">Delete Selected</button>
+        <div class="mb-3">
+            <button type="submit" name="action" value="start" class="btn btn-success">Start Selected</button>
+            <button type="submit" name="action" value="stop" class="btn btn-danger">Stop Selected</button>
+            <button type="submit" name="action" value="delete" onclick="return confirm('Are you sure you want to delete the selected VMs?');" class="btn btn-secondary">Delete Selected</button>
         </div>
 
-        <table>
-            <thead>
+        <table class="table table-bordered table-striped">
+            <thead class="table-dark">
                 <tr>
                     <th><input type="checkbox" id="select-all"></th>
                     <th>Name</th>
@@ -29,17 +29,17 @@
                 <tr>
                     <td><input type="checkbox" name="vm_uuids" value="{{ vm.uuid }}"></td>
                     <td>
-                        <a href="{{ url_for('listing.view_vm', uuid=vm.uuid) }}" style="text-decoration: none; color: #007bff;">
-                            <strong style="font-size: 1.1em;">{{ vm.name }}</strong>
+                        <a href="{{ url_for('listing.view_vm', uuid=vm.uuid) }}" class="text-decoration-none">
+                            <strong class="fs-5">{{ vm.name }}</strong>
                         </a>
                         <br>
-                        <small style="color:#888">{{ vm.uuid }}</small>
+                        <small class="text-muted">{{ vm.uuid }}</small>
                     </td>
                     <td>
                         {% if vm.state_code == 1 %}
-                            <span style="color:green; font-weight:bold;">● Running</span>
+                            <span class="text-success fw-bold">● Running</span>
                         {% elif vm.state_code == 5 %}
-                            <span style="color:red;">● Off</span>
+                            <span class="text-danger fw-bold">● Off</span>
                         {% else %}
                             <span>{{ vm.state }}</span>
                         {% endif %}
@@ -48,30 +48,22 @@
                     <td>{{ vm.vcpus }}</td>
                     <td>
                         {% if vm.state_code == 1 %}
-                            <a href="{{ url_for('listing.console_vm', uuid=vm.uuid) }}">
-                                <button type="button" style="background:#343a40; padding:5px 10px; font-size:12px;">Console</button>
-                            </a>
+                            <a href="{{ url_for('listing.console_vm', uuid=vm.uuid) }}" class="btn btn-dark btn-sm">Console</a>
                         {% else %}
-                            <button style="background:#e9ecef; color:#adb5bd; padding:5px 10px; font-size:12px; cursor: not-allowed;" disabled>Console</button>
+                            <button class="btn btn-secondary btn-sm" disabled>Console</button>
                         {% endif %}
     
                         {% if vm.state_code == 5 %}
-                            <a href="{{ url_for('listing.start_vm', uuid=vm.uuid) }}">
-                                <button type="button" style="background:#28a745; padding:5px 10px; font-size:12px;">Start</button>
-                            </a>
+                            <a href="{{ url_for('listing.start_vm', uuid=vm.uuid) }}" class="btn btn-success btn-sm">Start</a>
                         {% else %}
-                            <a href="{{ url_for('listing.stop_vm', uuid=vm.uuid) }}" onclick="return confirm('Force Power Off?');">
-                                <button type="button" style="background:#dc3545; padding:5px 10px; font-size:12px;">Stop</button>
-                            </a>
+                            <a href="{{ url_for('listing.stop_vm', uuid=vm.uuid) }}" onclick="return confirm('Force Power Off?');" class="btn btn-danger btn-sm">Stop</a>
                         {% endif %}
     
-                        <a href="{{ url_for('listing.delete_vm', uuid=vm.uuid) }}" onclick="return confirm('Delete this VM?');">
-                            <button type="button" style="background:#6c757d; padding:5px 10px; font-size:12px;">Delete</button>
-                        </a>
+                        <a href="{{ url_for('listing.delete_vm', uuid=vm.uuid) }}" onclick="return confirm('Delete this VM?');" class="btn btn-secondary btn-sm">Delete</a>
                     </td>
                 </tr>
                 {% else %}
-                <tr><td colspan="6" style="text-align:center;">No VMs found.</td></tr>
+                <tr><td colspan="6" class="text-center">No VMs found.</td></tr>
                 {% endfor %}
             </tbody>
         </table>
