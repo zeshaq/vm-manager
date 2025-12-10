@@ -49,8 +49,10 @@
                     <td>
                         {% if vm.state_code == 1 %}
                             <a href="{{ url_for('listing.console_vm', uuid=vm.uuid) }}" class="btn btn-dark btn-sm">Console</a>
+                            <a href="{{ vm.terminal_url }}" class="btn btn-primary btn-sm">Terminal</a>
                         {% else %}
                             <button class="btn btn-secondary btn-sm" disabled>Console</button>
+                            <button class="btn btn-secondary btn-sm" disabled>Terminal</button>
                         {% endif %}
     
                         {% if vm.state_code == 5 %}

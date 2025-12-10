@@ -1,4 +1,4 @@
 Flask
-libvirt-python
 simplepam
-requests
+libvirt-python
+flask-socketio

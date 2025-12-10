@@ -178,7 +178,8 @@ def list_vms():
                 'state': get_vm_state_string(info[0]),
                 'state_code': info[0],
                 'memory_mb': int(info[1] / 1024),
-                'vcpus': info[3]
+                'vcpus': info[3],
+                'terminal_url': url_for('terminal.terminal', vm_name=domain.name())
             })
         vms_list.sort(key=lambda x: x['name'])
     except libvirt.libvirtError as e:
