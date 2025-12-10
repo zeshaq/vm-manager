@@ -11,10 +11,19 @@ from views.loadbalancer import lb_bp
 from views.setup import setup_bp
 from views.terminal import terminal_bp
 
-from flask_sock import Sock
+from sockets import sock
 
 app = Flask(__name__)
-sock = Sock(app)
+sock.init_app(app)
+
+# Register the blueprints
+app.register_blueprint(listing_bp)
+app.register_blueprint(creation_bp)
+app.register_blueprint(storage_bp)
+app.register_blueprint(audit_bp)
+app.register_blueprint(lb_bp)
+app.register_blueprint(setup_bp)
+app.register_blueprint(terminal_bp)
 
 @app.before_request
 def before_request():

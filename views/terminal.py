@@ -5,7 +5,7 @@ from flask import Blueprint, render_template, request
 from flask_sock import ConnectionClosed
 
 # Import the sock object from the main app
-from app import sock
+from sockets import sock
 
 terminal_bp = Blueprint('terminal', __name__)
 
