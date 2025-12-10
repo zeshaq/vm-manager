@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>noVNC</title>
+    <meta charset="utf-8">
+    <script type="module">
+        import RFB from 'https://cdn.jsdelivr.net/npm/@novnc/novnc/core/rfb.js';
+
+        let rfb;
+        let desktopName;
+        const host = window.location.hostname;
+        const port = window.location.port || (window.location.protocol === 'https:' ? 443 : 80);
+        const path = `/vnc?vm_name={{ vm_name }}`;
+
+        function connectedToServer(e) {
+            console.log("VNC connected");
+        }
+
+        function disconnectedFromServer(e) {
+            console.log("VNC disconnected");
+        }
+
+        document.addEventListener("DOMContentLoaded", function() {
+            const rfbContainer = document.getElementById('vnc-canvas');
+            const url = `ws://${host}:${port}${path}`;
+            rfb = new RFB(rfbContainer, url);
+            rfb.addEventListener("connect",  connectedToServer);
+            rfb.addEventListener("disconnect", disconnectedFromServer);
+        });
+    </script>
+</head>
+<body>
+    <div id="vnc-canvas" style="width: 1024px; height: 768px; margin: auto;"></div>
+</body>
+</html>

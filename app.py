@@ -9,22 +9,12 @@ from views.storage import storage_bp
 from views.audit import audit_bp
 from views.loadbalancer import lb_bp
 from views.setup import setup_bp
-from views.terminal import terminal_bp, setup_terminal
+from views.terminal import terminal_bp
+
+from flask_sock import Sock
 
 app = Flask(__name__)
-app.secret_key = os.urandom(24)
-
-# Register the blueprints
-app.register_blueprint(listing_bp)
-app.register_blueprint(creation_bp)
-app.register_blueprint(storage_bp)
-app.register_blueprint(audit_bp)
-app.register_blueprint(lb_bp)
-app.register_blueprint(setup_bp)
-app.register_blueprint(terminal_bp)
-
-# Setup terminal socket
-socketio = setup_terminal(app)
+sock = Sock(app)
 
 @app.before_request
 def before_request():
@@ -93,4 +83,4 @@ def index():
     return render_template('home.html', host=host_info)
 
 if __name__ == '__main__':
-    socketio.run(app, host='0.0.0.0', port=5000, debug=True)
+    app.run(host='0.0.0.0', port=5000, debug=True)

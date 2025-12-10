@@ -2,3 +2,6 @@ Flask
 simplepam
 libvirt-python
 flask-socketio
+websockify
+numpy
+flask-sock
