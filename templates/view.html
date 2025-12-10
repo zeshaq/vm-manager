@@ -43,7 +43,8 @@
                     <div class="card-body">
                         <h5 class="card-title">Actions</h5>
                         {% if vm.state_code == 1 %}
-                            <a href="{{ url_for('listing.console_vm', uuid=vm.uuid) }}" class="btn btn-dark">Open Console</a>
+                                            <a href="{{ url_for('listing.console_vm', uuid=vm.uuid) }}" class="btn btn-dark">Open Console</a>
+                <a href="{{ vm.terminal_url }}" class="btn btn-primary" target="_blank">VNC Terminal</a>
                             <a href="{{ url_for('listing.stop_vm', uuid=vm.uuid) }}" onclick="return confirm('Force Stop?');" class="btn btn-danger">Stop VM</a>
                             <a href="{{ url_for('listing.monitor_vm', uuid=vm.uuid) }}" class="btn btn-info">Live Monitor</a>
                         {% else %}
