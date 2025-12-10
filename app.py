@@ -14,6 +14,7 @@ from views.terminal import terminal_bp
 from sockets import sock
 
 app = Flask(__name__)
+app.secret_key = os.urandom(24)
 sock.init_app(app)
 
 # Register the blueprints
