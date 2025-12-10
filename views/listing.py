@@ -297,19 +297,33 @@ def view_vm(uuid):
                                 k_iface['ips'] = [ip['addr'] for ip in val.get('addrs', [])]
                 except: pass
 
-            # --- 5. Legacy Boot Fallback ---
-            if not current_boot['1']:
-                os_boot = tree.findall('os/boot')
-                if len(os_boot) > 0:
-                    dev = os_boot[0].get('dev')
-                    if dev == 'hd': current_boot['1'] = 'hd_generic'
-                    elif dev == 'cdrom': current_boot['1'] = 'cdrom_generic'
-                    elif dev == 'network': current_boot['1'] = 'network'
-                if len(os_boot) > 1:
-                    dev = os_boot[1].get('dev')
-                    if dev == 'hd': current_boot['2'] = 'hd_generic'
-                    elif dev == 'cdrom': current_boot['2'] = 'cdrom_generic'
-                    elif dev == 'network': current_boot['2'] = 'network'
+            # --- 5. Build Boot Device List (for drag-and-drop) ---
+            all_boot_options = []
+            # Add network first
+            all_boot_options.append({'value': 'network', 'text': 'Network (PXE)'})
+            # Add disks
+            for disk in disks:
+                all_boot_options.append({
+                    'value': f"disk|{disk['target']}",
+                    'text': f"Disk ({disk['target']}) - {disk['file'].split('/')[-1]}"
+                })
+            
+            # Create a map for quick lookups
+            option_map = {opt['value']: opt for opt in all_boot_options}
+            
+            # Get the ordered list based on current_boot
+            boot_devices = []
+            if current_boot['1'] and current_boot['1'] in option_map:
+                boot_devices.append(option_map[current_boot['1']])
+            if current_boot['2'] and current_boot['2'] in option_map:
+                boot_devices.append(option_map[current_boot['2']])
+            
+            # Add remaining, non-booted devices
+            booted_values = {dev['value'] for dev in boot_devices}
+            for option in all_boot_options:
+                if option['value'] not in booted_values:
+                    boot_devices.append(option)
+
 
             # --- 6. Snapshots ---
             snapshots = []
@@ -332,8 +346,9 @@ def view_vm(uuid):
                 'disks': disks,
                 'host_gpus': hostdevs,        
                 'available_gpus': available_gpus, 
-                'current_boot': current_boot,
-                'snapshots': snapshots
+                'boot_devices': boot_devices,
+                'snapshots': snapshots,
+                'current_boot': current_boot # Keep for reference if needed elsewhere
             }
         except libvirt.libvirtError as e:
             return f"Error: {e}"
@@ -428,54 +443,59 @@ def delete_disk(uuid):
 
 # --- BOOT MANAGEMENT ---
 
-@listing_bp.route('/boot_order/<uuid>', methods=['POST'])
+@listing_bp.route('/vm/<uuid>/boot', methods=['POST'])
 def update_boot_order(uuid):
     conn = get_db_connection()
-    if conn:
-        try:
-            dom = conn.lookupByUUIDString(uuid)
-            boot1 = request.form.get('boot1')
-            boot2 = request.form.get('boot2')
+    if not conn:
+        return jsonify({'success': False, 'error': 'Could not connect to hypervisor'})
+    try:
+        dom = conn.lookupByUUIDString(uuid)
+        boot1 = request.form.get('boot1')
+        boot2 = request.form.get('boot2')
+        
+        xml_str = dom.XMLDesc(libvirt.VIR_DOMAIN_XML_INACTIVE)
+        tree = ET.fromstring(xml_str)
+        
+        # Clear all existing boot orders
+        os_node = tree.find('os')
+        for b in os_node.findall('boot'):
+            os_node.remove(b)
+        for d in tree.findall('.//disk'):
+            b = d.find('boot')
+            if b is not None: d.remove(b)
+        for i in tree.findall('.//interface'):
+            b = i.find('boot')
+            if b is not None: i.remove(b)
+        
+        def apply_order(selection, num):
+            if not selection or selection == 'none':
+                return
             
-            xml_str = dom.XMLDesc(libvirt.VIR_DOMAIN_XML_INACTIVE)
-            tree = ET.fromstring(xml_str)
-            
-            os_node = tree.find('os')
-            for b in os_node.findall('boot'): os_node.remove(b)
-            for d in tree.findall('devices/disk'):
-                b = d.find('boot')
-                if b is not None: d.remove(b)
-            for i in tree.findall('devices/interface'):
-                b = i.find('boot')
-                if b is not None: i.remove(b)
-            
-            def apply_order(selection, num):
-                if not selection or selection == 'none': return
-                parts = selection.split('|')
-                type_ = parts[0]
-                if type_ == 'disk':
-                    target = parts[1]
-                    for d in tree.findall('devices/disk'):
-                        t = d.find('target')
-                        if t is not None and t.get('dev') == target:
-                            ET.SubElement(d, 'boot', {'order': str(num)})
-                            break
-                elif type_ == 'network':
-                    iface = tree.find('devices/interface')
-                    if iface is not None:
-                        ET.SubElement(iface, 'boot', {'order': str(num)})
-                elif type_ in ['hd_generic', 'cdrom_generic']:
-                    dev_map = {'hd_generic': 'hd', 'cdrom_generic': 'cdrom'}
-                    ET.SubElement(os_node, 'boot', {'dev': dev_map[type_]})
-            
-            apply_order(boot1, 1)
-            apply_order(boot2, 2)
-            
-            conn.defineXML(ET.tostring(tree).decode())
-            
-        except libvirt.libvirtError as e: return f"Error: {e}"
-        finally: conn.close()
-    return redirect(url_for('listing.view_vm', uuid=uuid))
+            type_, _, value = selection.partition('|')
+
+            if type_ == 'disk':
+                for d in tree.findall('.//disk'):
+                    t = d.find('target')
+                    if t is not None and t.get('dev') == value:
+                        ET.SubElement(d, 'boot', {'order': str(num)})
+                        break
+            elif type_ == 'network':
+                iface = tree.find('.//interface')
+                if iface is not None:
+                    ET.SubElement(iface, 'boot', {'order': str(num)})
+        
+        apply_order(boot1, 1)
+        apply_order(boot2, 2)
+        
+        conn.defineXML(ET.tostring(tree).decode())
+        log_event('Boot Order Updated', target_uuid=uuid, target_name=dom.name(), details=f"1st: {boot1}, 2nd: {boot2}")
+        return jsonify({'success': True})
+
+    except libvirt.libvirtError as e:
+        return jsonify({'success': False, 'error': str(e)})
+    finally:
+        if conn:
+            conn.close()
 
 # --- NETWORK MANAGEMENT ---
 

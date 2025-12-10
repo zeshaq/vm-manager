@@ -59,76 +59,77 @@
         <div class="mb-4">
             <h3 class="h5">Boot Configuration</h3>
             <div class="row">
-                <div class="col-md-6">
+                <div class="col-md-12">
                     <div class="card h-100">
                         <div class="card-body">
-                            <h6 class="card-subtitle mb-2 text-muted">Current Boot Order</h6>
-                            <ol class="list-group list-group-numbered">
-                                <li class="list-group-item">
-                                    {% if vm.current_boot['1'] == 'network' %} Network (PXE)
-                                    {% elif vm.current_boot['1'] and 'disk|' in vm.current_boot['1'] %} Disk ({{ vm.current_boot['1'].split('|')[1] }})
-                                    {% elif vm.current_boot['1'] == 'hd_generic' %} Hard Disk (Generic)
-                                    {% elif vm.current_boot['1'] == 'cdrom_generic' %} CD-ROM (Generic)
-                                    {% else %} Not Set {% endif %}
-                                </li>
-                                <li class="list-group-item">
-                                    {% if vm.current_boot['2'] == 'network' %} Network (PXE)
-                                    {% elif vm.current_boot['2'] and 'disk|' in vm.current_boot['2'] %} Disk ({{ vm.current_boot['2'].split('|')[1] }})
-                                    {% elif vm.current_boot['2'] == 'hd_generic' %} Hard Disk (Generic)
-                                    {% elif vm.current_boot['2'] == 'cdrom_generic' %} CD-ROM (Generic)
-                                    {% else %} <em>None</em> {% endif %}
-                                </li>
-                            </ol>
-                        </div>
-                    </div>
-                </div>
-                <div class="col-md-6">
-                    <div class="card h-100">
-                        <div class="card-body">
-                            <form action="{{ url_for('listing.update_boot_order', uuid=vm.uuid) }}" method="POST">
-                                <div class="mb-3">
-                                    <label for="boot1" class="form-label">1st Boot Device</label>
-                                    <select id="boot1" name="boot1" class="form-select">
-                                        <option value="network" {% if vm.current_boot['1'] == 'network' %}selected{% endif %}>Network (PXE)</option>
-                                        <optgroup label="Disks">
-                                            {% for disk in vm.disks %}
-                                                {% set val = 'disk|' + disk.target %}
-                                                <option value="{{ val }}" {% if vm.current_boot['1'] == val %}selected{% endif %}>
-                                                    {{ disk.device|upper }} ({{ disk.target }}) - {{ disk.file.split('/')[-1] }}
-                                                </option>
-                                            {% endfor %}
-                                        </optgroup>
-                                        <optgroup label="Legacy">
-                                            <option value="hd_generic" {% if vm.current_boot['1'] == 'hd_generic' %}selected{% endif %}>Any Hard Disk</option>
-                                            <option value="cdrom_generic" {% if vm.current_boot['1'] == 'cdrom_generic' %}selected{% endif %}>Any CD-ROM</option>
-                                        </optgroup>
-                                    </select>
+                            <div class="row">
+                                <div class="col-md-6">
+                                    <h6 class="card-subtitle mb-2 text-muted">Boot Priority</h6>
+                                    <p class="small text-muted">Drag and drop to reorder. Changes are saved automatically.</p>
+                                    <ul id="boot-order-list" class="list-group">
+                                        {% for device in vm.boot_devices %}
+                                            <li class="list-group-item" data-value="{{ device.value }}">{{ device.text }}</li>
+                                        {% endfor %}
+                                    </ul>
                                 </div>
-                                <div class="mb-3">
-                                    <label for="boot2" class="form-label">2nd Boot Device</label>
-                                    <select id="boot2" name="boot2" class="form-select">
-                                        <option value="none">None</option>
-                                        <option value="network" {% if vm.current_boot['2'] == 'network' %}selected{% endif %}>Network (PXE)</option>
-                                        <optgroup label="Disks">
-                                            {% for disk in vm.disks %}
-                                                {% set val = 'disk|' + disk.target %}
-                                                <option value="{{ val }}" {% if vm.current_boot['2'] == val %}selected{% endif %}>
-                                                    {{ disk.device|upper }} ({{ disk.target }})
-                                                </option>
-                                            {% endfor %}
-                                        </optgroup>
-                                    </select>
-                                </div>
-                                <div class="d-flex justify-content-between align-items-center">
-                                    <small class="text-muted">* Applies on next restart</small>
-                                    <button type="submit" class="btn btn-primary btn-sm">Save Changes</button>
-                                </div>
-                            </form>
+                            </div>
                         </div>
                     </div>
                 </div>
             </div>
         </div>
+
+        <!-- Toast container for save confirmation -->
+        <div class="toast-container position-fixed bottom-0 end-0 p-3">
+            <div id="saveToast" class="toast" role="alert" aria-live="assertive" aria-atomic="true">
+                <div class="toast-header">
+                    <strong class="me-auto">Boot Order</strong>
+                    <button type="button" class="btn-close" data-bs-dismiss="toast" aria-label="Close"></button>
+                </div>
+                <div class="toast-body">
+                    Successfully saved.
+                </div>
+            </div>
+        </div>
+
+        <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.0/Sortable.min.js"></script>
+        <script>
+            document.addEventListener('DOMContentLoaded', function () {
+                var el = document.getElementById('boot-order-list');
+                var toastEl = document.getElementById('saveToast');
+                var toast = new bootstrap.Toast(toastEl);
+
+                new Sortable(el, {
+                    animation: 150,
+                    onEnd: function (evt) {
+                        var items = Array.from(el.children);
+                        var boot1 = items[0] ? items[0].dataset.value : 'none';
+                        var boot2 = items[1] ? items[1].dataset.value : 'none';
+
+                        var formData = new FormData();
+                        formData.append('boot1', boot1);
+                        formData.append('boot2', boot2);
+
+                        fetch('{{ url_for("listing.update_boot_order", uuid=vm.uuid) }}', {
+                            method: 'POST',
+                            body: formData
+                        })
+                        .then(response => response.json())
+                        .then(data => {
+                            if (data.success) {
+                                toast.show();
+                            } else {
+                                alert('Error saving boot order: ' + data.error);
+                            }
+                        })
+                        .catch(error => {
+                            console.error('Error:', error);
+                            alert('An unexpected error occurred.');
+                        });
+                    }
+                });
+            });
+        </script>
 
         <!-- Sections for Storage, Network, GPU, Snapshots -->
         {% for section_title, items, columns, form_action, form_fields, form_button_text in [
