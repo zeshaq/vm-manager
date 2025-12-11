@@ -223,6 +223,42 @@ def list_projects():
     sorted_projects = sorted(list(projects))
     return render_template('projects.html', projects=sorted_projects)
 
+@listing_bp.route('/project/delete', methods=['POST'])
+def delete_project():
+    project_to_delete = request.form.get('project_name')
+    if not project_to_delete:
+        return redirect(url_for('listing.list_projects'))
+
+    conn = get_db_connection()
+    if not conn:
+        return "Error connecting to hypervisor"
+
+    try:
+        domains = conn.listAllDomains(0)
+        for domain in domains:
+            xml_str = domain.XMLDesc(libvirt.VIR_DOMAIN_XML_INACTIVE)
+            tree = ET.fromstring(xml_str)
+            
+            meta = tree.find('metadata')
+            if meta is not None:
+                project_tag = meta.find('project')
+                if project_tag is not None and project_tag.text == project_to_delete:
+                    meta.remove(project_tag)
+                    # If metadata is now empty, remove it
+                    if not list(meta):
+                        tree.remove(meta)
+                    
+                    # Redefine the VM with the modified XML
+                    conn.defineXML(ET.tostring(tree).decode())
+                    log_event('Project Removed', target_uuid=domain.UUIDString(), target_name=domain.name(), details=f"Project '{project_to_delete}' was removed.")
+
+    except libvirt.libvirtError as e:
+        print(f"Error during project deletion: {e}")
+    finally:
+        conn.close()
+    
+    return redirect(url_for('listing.list_projects'))
+
 
 # --- VIEW & PARSING LOGIC ---
 
