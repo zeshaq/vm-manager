@@ -5,3 +5,4 @@ flask-socketio
 websockify
 numpy
 flask-sock
+gunicorn
