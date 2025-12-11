@@ -18,6 +18,7 @@
                 <tr>
                     <th><input type="checkbox" id="select-all"></th>
                     <th>Name</th>
+                    <th>Project</th>
                     <th>State</th>
                     <th>Memory</th>
                     <th>vCPUs</th>
@@ -35,6 +36,7 @@
                         <br>
                         <small class="text-muted">{{ vm.uuid }}</small>
                     </td>
+                    <td>{{ vm.project }}</td>
                     <td>
                         {% if vm.state_code == 1 %}
                             <span class="text-success fw-bold">● Running</span>
@@ -65,7 +67,7 @@
                     </td>
                 </tr>
                 {% else %}
-                <tr><td colspan="6" class="text-center">No VMs found.</td></tr>
+                <tr><td colspan="7" class="text-center">No VMs found.</td></tr>
                 {% endfor %}
             </tbody>
         </table>

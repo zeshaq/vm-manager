@@ -171,10 +171,16 @@ def list_vms():
     try:
         domains = conn.listAllDomains(0)
         for domain in domains:
+            xml_str = domain.XMLDesc(0)
+            tree = ET.fromstring(xml_str)
+            project_tag = tree.find('metadata/project')
+            project = project_tag.text if project_tag is not None else 'N/A'
+
             info = domain.info()
             vms_list.append({
                 'uuid': domain.UUIDString(),
                 'name': domain.name(),
+                'project': project,
                 'state': get_vm_state_string(info[0]),
                 'state_code': info[0],
                 'memory_mb': int(info[1] / 1024),
@@ -208,6 +214,10 @@ def view_vm(uuid):
             xml_str = dom.XMLDesc(libvirt.VIR_DOMAIN_XML_INACTIVE)
             tree = ET.fromstring(xml_str)
             
+            # --- 0. Project ---
+            project_tag = tree.find('metadata/project')
+            project = project_tag.text if project_tag is not None else 'N/A'
+
             # --- 1. Disks & Boot Order ---
             disks = []
             current_boot = {'1': None, '2': None}
@@ -337,6 +347,7 @@ def view_vm(uuid):
             vm_details = {
                 'uuid': dom.UUIDString(),
                 'name': dom.name(),
+                'project': project,
                 'state': get_vm_state_string(info[0]),
                 'state_code': info[0],
                 'memory_mb': int(info[1] / 1024),
@@ -695,11 +706,16 @@ def edit_vm(uuid):
     conn = get_db_connection()
     if not conn: return "Error"
     dom = conn.lookupByUUIDString(uuid)
+    
     if request.method == 'POST':
         new_cpu = int(request.form['cpu'])
         new_ram_mb = int(request.form['ram'])
+        new_project = request.form.get('project')
+
         xml_str = dom.XMLDesc(libvirt.VIR_DOMAIN_XML_INACTIVE)
         tree = ET.fromstring(xml_str)
+        
+        # Resources
         mem = tree.find('memory')
         curr = tree.find('currentMemory')
         if mem is not None: 
@@ -710,11 +726,40 @@ def edit_vm(uuid):
             curr.set('unit', 'KiB')
         vcpu = tree.find('vcpu')
         if vcpu is not None: vcpu.text = str(new_cpu)
+        
+        # Metadata / Project
+        meta = tree.find('metadata')
+        if meta is None and new_project:
+            meta = ET.SubElement(tree, 'metadata')
+
+        project_tag = meta.find('project') if meta is not None else None
+        
+        if new_project:
+            if project_tag is not None:
+                project_tag.text = new_project
+            else:
+                ET.SubElement(meta, 'project').text = new_project
+        elif project_tag is not None:
+            meta.remove(project_tag)
+
         conn.defineXML(ET.tostring(tree).decode())
         conn.close()
         return redirect(url_for('listing.view_vm', uuid=uuid))
+
+    # GET Request
     info = dom.info()
-    vm_data = {'uuid': dom.UUIDString(), 'name': dom.name(), 'ram': int(info[1] / 1024), 'cpu': info[3]}
+    xml_str = dom.XMLDesc(libvirt.VIR_DOMAIN_XML_INACTIVE)
+    tree = ET.fromstring(xml_str)
+    project_tag = tree.find('metadata/project')
+    project = project_tag.text if project_tag is not None else ''
+
+    vm_data = {
+        'uuid': dom.UUIDString(), 
+        'name': dom.name(), 
+        'ram': int(info[1] / 1024), 
+        'cpu': info[3],
+        'project': project
+    }
     conn.close()
     return render_template('edit.html', vm=vm_data)
 

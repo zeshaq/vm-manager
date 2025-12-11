@@ -8,6 +8,8 @@ done
 
 
 
+
+
     git config --global user.name "zahid"
     git config --global user.email zeshaq@gmail.com
 
@@ -17,9 +19,11 @@ done
     update-grub
     dmesg | grep -i "Intel-IOMMU"
 
-    lspci | grep -i nvidia
+lspci | grep -i nvidia
 lspci -nnk -s 04:00.0
 sudo apt install nvidia-driver-580-server
 
 
 gunicorn app:app --reload -b 0.0.0.0:5000
+
+wget --no-check-certificate -O discovery.iso 'https://assisted-image-service-multicluster-engine.apps.hub-cluster.zeteq.com/byapikey/eyJhbGciOiJFUzI1NiIsInR5cCI6IkpXVCJ9.eyJpbmZyYV9lbnZfaWQiOiI1NThmMzhkNC05Y2Y2LTQwNjAtODE0OC01ZWVlZWE4YTE1ZTAifQ.ZUyQ9nECIMajKqnNlZcDm-anB0Vj-tbcm8MTLs0zHIJNNXU1rlEqGYnIfDHrwNlllvEMnSdYk_uGwUqP6JJxig/4.21/x86_64/full.iso'

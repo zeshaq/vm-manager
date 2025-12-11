@@ -3,7 +3,7 @@ from flask import Blueprint, render_template, request, redirect, url_for
 
 creation_bp = Blueprint('creation', __name__)
 
-def generate_vm_xml(name, memory_mb, vcpus, host_cpu=False):
+def generate_vm_xml(name, memory_mb, vcpus, project=None, host_cpu=False):
     # Convert MB to KiB
     memory_kib = int(memory_mb) * 1024
     
@@ -11,10 +11,20 @@ def generate_vm_xml(name, memory_mb, vcpus, host_cpu=False):
     cpu_xml = ""
     if host_cpu:
         cpu_xml = "<cpu mode='host-passthrough' check='none'/>"
+
+    # Project Metadata
+    meta_xml = ""
+    if project:
+        meta_xml = f"""
+        <metadata>
+            <project>{project}</project>
+        </metadata>
+        """
         
     return f"""
     <domain type='kvm'>
       <name>{name}</name>
+      {meta_xml}
       <memory unit='KiB'>{memory_kib}</memory>
       <vcpu placement='static'>{vcpus}</vcpu>
       {cpu_xml}
@@ -47,12 +57,13 @@ def create_vm():
             name = request.form['name']
             ram = request.form['ram'] # Value is in MB
             cpu = request.form['cpu']
+            project = request.form.get('project')
             
             # CPU Passthrough Checkbox
             use_host_cpu = request.form.get('host_cpu') == 'on'
 
             # Generate XML
-            xml_config = generate_vm_xml(name, ram, cpu, use_host_cpu)
+            xml_config = generate_vm_xml(name, ram, cpu, project, use_host_cpu)
 
             conn = libvirt.open('qemu:///system')
             if conn:

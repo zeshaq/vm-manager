@@ -21,6 +21,11 @@
                         <input type="number" id="ram" name="ram" value="{{ vm.ram }}" min="512" step="512" required class="form-control">
                     </div>
                     
+                    <div class="mb-3">
+                        <label for="project" class="form-label">Project:</label>
+                        <input type="text" id="project" name="project" value="{{ vm.project }}" class="form-control">
+                    </div>
+                    
                     <div class="d-grid gap-2">
                         <button type="submit" class="btn btn-success">Save Changes</button>
                         <a href="/list" class="btn btn-secondary">Cancel</a>
