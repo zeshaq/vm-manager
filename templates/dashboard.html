@@ -1,0 +1,143 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="container-fluid">
+    <h1 class="mt-4">Dashboard</h1>
+
+    <div class="row">
+        <div class="col-xl-3 col-md-6 mb-4">
+            <div class="card border-left-primary shadow h-100 py-2">
+                <div class="card-body">
+                    <div class="row no-gutters align-items-center">
+                        <div class="col mr-2">
+                            <div class="text-xs font-weight-bold text-primary text-uppercase mb-1">Uptime</div>
+                            <div class="h5 mb-0 font-weight-bold text-gray-800">{{ uptime }}</div>
+                        </div>
+                        <div class="col-auto">
+                            <i class="bi bi-clock-history fa-2x text-gray-300"></i>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="col-xl-3 col-md-6 mb-4">
+            <div class="card border-left-success shadow h-100 py-2">
+                <div class="card-body">
+                    <div class="row no-gutters align-items-center">
+                        <div class="col mr-2">
+                            <div class="text-xs font-weight-bold text-success text-uppercase mb-1">CPU Usage</div>
+                            <div class="h5 mb-0 font-weight-bold text-gray-800">{{ cpu_percent }}%</div>
+                            <div class="progress mt-2">
+                                <div class="progress-bar bg-success" role="progressbar" style="width: {{ cpu_percent }}%" aria-valuenow="{{ cpu_percent }}" aria-valuemin="0" aria-valuemax="100"></div>
+                            </div>
+                        </div>
+                        <div class="col-auto">
+                            <i class="bi bi-cpu fa-2x text-gray-300"></i>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="col-xl-3 col-md-6 mb-4">
+            <div class="card border-left-info shadow h-100 py-2">
+                <div class="card-body">
+                    <div class="row no-gutters align-items-center">
+                        <div class="col mr-2">
+                            <div class="text-xs font-weight-bold text-info text-uppercase mb-1">Memory Usage</div>
+                            <div class="h5 mb-0 font-weight-bold text-gray-800">{{ mem_used_gb }} GB / {{ mem_total_gb }} GB</div>
+                             <div class="progress mt-2">
+                                <div class="progress-bar bg-info" role="progressbar" style="width: {{ mem_percent }}%" aria-valuenow="{{ mem_percent }}" aria-valuemin="0" aria-valuemax="100"></div>
+                            </div>
+                        </div>
+                        <div class="col-auto">
+                            <i class="bi bi-memory fa-2x text-gray-300"></i>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="col-xl-3 col-md-6 mb-4">
+            <div class="card border-left-warning shadow h-100 py-2">
+                <div class="card-body">
+                    <div class="row no-gutters align-items-center">
+                        <div class="col mr-2">
+                            <div class="text-xs font-weight-bold text-warning text-uppercase mb-1">Disk Usage (/)</div>
+                            <div class="h5 mb-0 font-weight-bold text-gray-800">{{ disk_used_gb }} GB / {{ disk_total_gb }} GB</div>
+                             <div class="progress mt-2">
+                                <div class="progress-bar bg-warning" role="progressbar" style="width: {{ disk_percent }}%" aria-valuenow="{{ disk_percent }}" aria-valuemin="0" aria-valuemax="100"></div>
+                            </div>
+                        </div>
+                        <div class="col-auto">
+                            <i class="bi bi-hdd fa-2x text-gray-300"></i>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="row">
+        <div class="col-lg-6">
+            <div class="card shadow mb-4">
+                <div class="card-header py-3">
+                    <h6 class="m-0 font-weight-bold text-primary">System Load</h6>
+                </div>
+                <div class="card-body">
+                    <p>1-minute Average: {{ cpu_load[0] }}</p>
+                    <p>5-minute Average: {{ cpu_load[1] }}</p>
+                    <p>15-minute Average: {{ cpu_load[2] }}</p>
+                </div>
+            </div>
+
+            <div class="card shadow mb-4">
+                <div class="card-header py-3">
+                    <h6 class="m-0 font-weight-bold text-primary">Network IO</h6>
+                </div>
+                <div class="card-body">
+                    <p>Bytes Sent: {{ (net.bytes_sent / (1024**3)) | round(2) }} GB</p>
+                    <p>Bytes Received: {{ (net.bytes_recv / (1024**3)) | round(2) }} GB</p>
+                </div>
+            </div>
+        </div>
+
+        <div class="col-lg-6">
+            <div class="card shadow mb-4">
+                <div class="card-header py-3">
+                    <h6 class="m-0 font-weight-bold text-primary">Top Processes</h6>
+                </div>
+                <div class="card-body">
+                    <div class="table-responsive">
+                        <table class="table table-bordered" width="100%" cellspacing="0">
+                            <thead>
+                                <tr>
+                                    <th>PID</th>
+                                    <th>Name</th>
+                                    <th>User</th>
+                                    <th>CPU %</th>
+                                    <th>Mem %</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for p in processes %}
+                                <tr>
+                                    <td>{{ p.pid }}</td>
+                                    <td>{{ p.name }}</td>
+                                    <td>{{ p.username }}</td>
+      
+                                    <td>{{ p.cpu_percent }}</td>
+                                    <td>{{ p.memory_percent | round(2) }}</td>
+                                </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+</div>
+{% endblock %}

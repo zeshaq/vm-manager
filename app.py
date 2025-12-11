@@ -11,6 +11,7 @@ from views.loadbalancer import lb_bp
 from views.setup import setup_bp
 from views.terminal import terminal_bp
 from views.host_terminal import host_terminal_bp
+from views.dashboard import dashboard_bp
 
 from sockets import sock
 
@@ -27,6 +28,7 @@ app.register_blueprint(lb_bp)
 app.register_blueprint(setup_bp)
 app.register_blueprint(terminal_bp)
 app.register_blueprint(host_terminal_bp)
+app.register_blueprint(dashboard_bp)
 
 @app.before_request
 def before_request():

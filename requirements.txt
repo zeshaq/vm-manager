@@ -8,3 +8,4 @@ flask-sock
 gunicorn
 gevent
 hypercorn
+psutil
