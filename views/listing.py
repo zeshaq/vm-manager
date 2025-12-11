@@ -3,6 +3,7 @@ import xml.etree.ElementTree as ET
 from flask import Blueprint, render_template, request, redirect, url_for, Response, jsonify
 import time
 from .audit import log_event
+from . import project_utils
 
 listing_bp = Blueprint('listing', __name__)
 
@@ -198,7 +199,8 @@ def list_vms():
     finally:
         conn.close()
 
-    return render_template('list.html', vms=vms_list, project_filter=project_filter)
+    projects = project_utils.load_projects()
+    return render_template('list.html', vms=vms_list, project_filter=project_filter, projects=projects)
 
 @listing_bp.route('/projects')
 def list_projects():
