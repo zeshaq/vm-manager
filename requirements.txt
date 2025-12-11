@@ -6,3 +6,5 @@ websockify
 numpy
 flask-sock
 gunicorn
+gevent
+hypercorn

@@ -20,3 +20,6 @@ done
     lspci | grep -i nvidia
 lspci -nnk -s 04:00.0
 sudo apt install nvidia-driver-580-server
+
+
+gunicorn app:app --reload -b 0.0.0.0:5000
