@@ -2,9 +2,22 @@
 
 {% block content %}
     <div class="d-flex justify-content-between align-items-center mb-4">
-        <h1>Virtual Machines</h1>
+        <h1>
+            {% if project_filter %}
+                Virtual Machines in Project: {{ project_filter }}
+            {% else %}
+                Virtual Machines
+            {% endif %}
+        </h1>
         <a href="/create" class="btn btn-success">+ New VM</a>
     </div>
+
+    {% if project_filter %}
+    <div class="alert alert-info d-flex justify-content-between align-items-center">
+        <span>You are viewing VMs in the '{{ project_filter }}' project.</span>
+        <a href="{{ url_for('listing.list_vms') }}" class="btn btn-secondary btn-sm">Clear Filter</a>
+    </div>
+    {% endif %}
 
     <form method="POST" id="vm-action-form">
         <div class="mb-3">

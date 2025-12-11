@@ -139,6 +139,8 @@ def list_vms():
     if not conn:
         return "Error connecting to hypervisor"
 
+    project_filter = request.args.get('project')
+
     if request.method == 'POST':
         uuids = request.form.getlist('vm_uuids')
         action = request.form.get('action')
@@ -166,7 +168,7 @@ def list_vms():
         conn.close()
         return redirect(url_for('listing.list_vms'))
 
-    # GET request logic remains the same
+    # GET request logic
     vms_list = []
     try:
         domains = conn.listAllDomains(0)
@@ -175,6 +177,9 @@ def list_vms():
             tree = ET.fromstring(xml_str)
             project_tag = tree.find('metadata/project')
             project = project_tag.text if project_tag is not None else 'N/A'
+
+            if project_filter and project != project_filter:
+                continue
 
             info = domain.info()
             vms_list.append({
@@ -193,7 +198,31 @@ def list_vms():
     finally:
         conn.close()
 
-    return render_template('list.html', vms=vms_list)
+    return render_template('list.html', vms=vms_list, project_filter=project_filter)
+
+@listing_bp.route('/projects')
+def list_projects():
+    conn = get_db_connection()
+    if not conn:
+        return "Error connecting to hypervisor"
+
+    projects = set()
+    try:
+        domains = conn.listAllDomains(0)
+        for domain in domains:
+            xml_str = domain.XMLDesc(0)
+            tree = ET.fromstring(xml_str)
+            project_tag = tree.find('metadata/project')
+            if project_tag is not None and project_tag.text:
+                projects.add(project_tag.text)
+    except libvirt.libvirtError as e:
+        print(f"Error: {e}")
+    finally:
+        conn.close()
+    
+    sorted_projects = sorted(list(projects))
+    return render_template('projects.html', projects=sorted_projects)
+
 
 # --- VIEW & PARSING LOGIC ---
 
