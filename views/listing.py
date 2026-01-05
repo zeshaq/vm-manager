@@ -467,6 +467,8 @@ def add_disk(uuid):
                 </disk>
                 """
             
+            print(f"DEBUG: Generated XML for disk attachment:\n{xml}")
+            
             flags = libvirt.VIR_DOMAIN_AFFECT_CONFIG
             if dom.isActive(): flags |= libvirt.VIR_DOMAIN_AFFECT_LIVE
             dom.attachDeviceFlags(xml, flags)
