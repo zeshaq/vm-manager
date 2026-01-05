@@ -438,6 +438,9 @@ def add_disk(uuid):
                 raise Exception("No available disk device names left.")
             # --- END AUTO-DETERMINE ---
 
+            is_iso = file_path.lower().endswith('.iso')
+            is_block_device = file_path.startswith('/dev/')
+
             if is_iso:
                 xml = f"""
                 <disk type='file' device='cdrom'>
@@ -445,6 +448,14 @@ def add_disk(uuid):
                   <source file='{file_path}'/>
                   <target dev='{target_dev}' bus='sata'/>
                   <readonly/>
+                </disk>
+                """
+            elif is_block_device:
+                xml = f"""
+                <disk type='block' device='disk'>
+                  <driver name='qemu' type='raw' cache='none' io='native'/>
+                  <source dev='{file_path}'/>
+                  <target dev='{target_dev}' bus='virtio'/>
                 </disk>
                 """
             else:
