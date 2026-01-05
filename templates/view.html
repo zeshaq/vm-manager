@@ -139,11 +139,11 @@
             });
         </script>
 
-        <!-- Sections for Storage, Network, GPU, Snapshots -->
+        <!-- Sections for Storage, Network, Devices, Snapshots -->
         {% for section_title, items, columns, form_action, form_fields, form_button_text in [
             ('Storage Devices', vm.disks, ['Device', 'Source', 'Type'], 'listing.add_disk', [('text', 'file_path', '/var/lib/libvirt/images/disk.qcow2')], '+ Add'),
             ('Network Interfaces', vm.interfaces, ['Model', 'Type/Source', 'MAC', 'IP'], 'listing.add_interface', [('select', 'mode', {'network': 'Virtual Network', 'bridge': 'Host Bridge'}), ('text', 'source', 'default')], '+ Attach'),
-            ('GPU Passthrough', vm.host_gpus, ['Device Name', 'PCI Address'], 'listing.attach_gpu', [('select', 'pci_id', vm.available_gpus)], '+ Attach GPU'),
+            ('PCI Passthrough Devices', vm.host_devices, ['Device', 'PCI ID'], 'listing.attach_device', [('select', 'pci_id', vm.available_devices)], '+ Attach Device'),
             ('Snapshots', vm.snapshots, ['Snapshot Name'], 'listing.create_snapshot', [('text', 'snapshot_name', 'e.g., before-update')], '+ Create')
         ] %}
         <div class="mb-4">
@@ -163,14 +163,14 @@
                         <tr>
                             {% for col in columns %}
                                 <td>
-                                    {% if col == 'Device' or col == 'Device Name' %}<strong>{{ item.target or item.name }}</strong>{% endif %}
+                                    {% if col == 'Device' %}<strong>{{ item.target or item.name }}</strong>{% endif %}
                                     {% if col == 'Source' %}{{ item.file }}{% endif %}
                                     {% if col == 'Type' %}{{ item.device }}{% endif %}
                                     {% if col == 'Model' %}{{ item.model }}{% endif %}
                                     {% if col == 'Type/Source' %}<strong>{{ item.type|capitalize }}</strong> → {{ item.network }}{% endif %}
                                     {% if col == 'MAC' %}<span class="font-monospace">{{ item.mac }}</span>{% endif %}
                                     {% if col == 'IP' %}{% for ip in item.ips %}{{ ip }}<br>{% endfor %}{% endif %}
-                                    {% if col == 'PCI Address' %}<span class="font-monospace">{{ item.pci_id }}</span>{% endif %}
+                                    {% if col == 'PCI ID' %}<span class="font-monospace">{{ item.pci_id }}</span>{% endif %}
                                     {% if col == 'Snapshot Name' %}<strong>{{ item.name }}</strong>{% endif %}
                                 </td>
                             {% endfor %}
@@ -185,10 +185,10 @@
                                         <input type="hidden" name="mac" value="{{ item.mac }}">
                                         <button type="submit" onclick="return confirm('Remove interface?')" class="btn btn-outline-danger btn-sm">Remove</button>
                                     </form>
-                                {% elif section_title == 'GPU Passthrough' %}
-                                    <form action="{{ url_for('listing.detach_gpu', uuid=vm.uuid) }}" method="POST" class="d-inline">
-                                        <input type="hidden" name="bus" value="{{ item.bus }}"><input type="hidden" name="slot" value="{{ item.slot }}"><input type="hidden" name="function" value="{{ item.function }}">
-                                        <button type="submit" onclick="return confirm('Detach GPU?')" class="btn btn-outline-danger btn-sm">Detach</button>
+                                {% elif section_title == 'PCI Passthrough Devices' %}
+                                    <form action="{{ url_for('listing.detach_device', uuid=vm.uuid) }}" method="POST" class="d-inline">
+                                        <input type="hidden" name="pci_id" value="{{ item.pci_id }}">
+                                        <button type="submit" onclick="return confirm('Detach Device?')" class="btn btn-outline-danger btn-sm">Detach</button>
                                     </form>
                                 {% elif section_title == 'Snapshots' %}
                                     <form action="{{ url_for('listing.revert_snapshot', uuid=vm.uuid) }}" method="POST" class="d-inline">
@@ -219,9 +219,9 @@
                             {% elif field_type == 'select' %}
                                 {% if field_name == 'pci_id' %}
                                     <select name="{{ field_name }}" class="form-select form-select-sm">
-                                        <option value="" disabled selected>Select an NVIDIA GPU...</option>
-                                        {% for gpu in field_placeholder %}
-                                            <option value="{{ gpu.pci_id }}">{{ gpu.name }} ({{ gpu.pci_id }})</option>
+                                        <option value="" disabled selected>Select a device...</option>
+                                        {% for device in field_placeholder %}
+                                            <option value="{{ device.pci_id }}">{{ device.name }} ({{ device.pci_id }})</option>
                                         {% endfor %}
                                     </select>
                                 {% else %}

@@ -27,112 +27,79 @@ def get_vm_state_string(state_int):
 # --- HELPER: FIND HOST GPUS (COMPATIBLE MODE) ---
 # --- HELPER: FIND HOST GPUS (Aggressive Scan) ---
 # --- HELPER: FIND HOST GPUS (Universal Fix) ---
-def get_host_gpus():
-    """Scans host for NVIDIA devices using Libvirt NodeDevice API"""
-    gpus = []
+def get_host_devices():
+    """Scans host for all PCI devices using Libvirt NodeDevice API"""
+    devices = []
     conn = get_db_connection()
-    if not conn: 
-        print("❌ [GPU Scan] Could not connect to Libvirt.")
+    if not conn:
+        print("❌ [Device Scan] Could not connect to Libvirt.")
         return []
-    
-    try:
-        # 1. Get List of Devices
-        try:
-            device_names = conn.listNodeDevices(0)
-        except AttributeError:
-            device_names = conn.listDevices('pci', 0)
 
-        print(f"🔍 [GPU Scan] Scanned {len(device_names)} devices.")
+    try:
+        device_names = conn.listNodeDevices('pci', 0)
+        print(f"🔍 [Device Scan] Scanned {len(device_names)} PCI devices.")
 
         for name in device_names:
             try:
                 dev = conn.nodeDeviceLookupByName(name)
                 xml_str = dev.XMLDesc()
-            except:
-                continue
-
-            # 2. Filter for NVIDIA (0x10de)
-            if "0x10de" not in xml_str.lower():
-                continue
-
-            try:
                 tree = ET.fromstring(xml_str)
-                
-                # 3. Verify PCI Capability
-                pci_cap = None
-                for cap in tree.findall('capability'):
-                    if cap.get('type') == 'pci':
-                        pci_cap = cap
-                        break
-                
-                if pci_cap is None: continue
 
-                # 4. Get Product Name (Handle empty tag)
-                product = tree.find(".//product")
-                if product is not None and product.text:
-                    product_name = product.text
-                else:
-                    # Fallback using the device name
-                    product_name = f"NVIDIA Device ({name})"
-
-                # 5. Extract Address (Handle both Attribute and Child Tag styles)
-                domain, bus, slot, function = None, None, None, None
+                # 1. Verify PCI Capability
+                pci_cap = tree.find(".//capability[@type='pci']")
+                if pci_cap is None:
+                    continue
                 
-                # Style A: <address domain='0x0000' bus='0x8a' ... />
-                address_tag = tree.find(".//address")
-                if address_tag is not None:
-                    domain = address_tag.get('domain').replace('0x', '')
-                    bus = address_tag.get('bus').replace('0x', '')
-                    slot = address_tag.get('slot').replace('0x', '')
-                    function = address_tag.get('function').replace('0x', '')
-                
-                # Style B (Your System): <bus>138</bus> (Decimal integers)
-                else:
-                    try:
-                        d_txt = pci_cap.find('domain').text
-                        b_txt = pci_cap.find('bus').text
-                        s_txt = pci_cap.find('slot').text
-                        f_txt = pci_cap.find('function').text
-                        
-                        # Convert Decimal to Hex String (without 0x prefix)
-                        domain = f"{int(d_txt):04x}"
-                        bus = f"{int(b_txt):02x}"
-                        slot = f"{int(s_txt):02x}"
-                        function = f"{int(f_txt):x}"
-                    except:
-                        pass # Parsing failed
+                # 2. Get IOMMU Group
+                iommu_group = None
+                iommu_tag = pci_cap.find("iommuGroup/number")
+                if iommu_tag is not None:
+                    iommu_group = iommu_tag.text
 
-                # 6. Add to list if we found a valid address
-                if bus and slot:
-                    pci_str = f"{domain}:{bus}:{slot}.{function}"
-                    
-                    gpus.append({
-                        'name': product_name,
-                        'pci_id': pci_str, 
-                        'bus': bus,
-                        'slot': slot,
-                        'function': function
-                    })
-                    print(f"✅ [GPU Scan] Found: {product_name} at {pci_str}")
+                # 3. Get Product and Vendor
+                product_tag = tree.find(".//product")
+                vendor_tag = tree.find(".//vendor")
+                product_name = product_tag.text if product_tag is not None and product_tag.text else f"PCI Device ({name})"
+                vendor_name = vendor_tag.text if vendor_tag is not None and vendor_tag.text else "Unknown Vendor"
+
+                # 4. Extract Address
+                address_tag = pci_cap.find("address")
+                if address_tag is None:
+                    continue
+
+                domain = f"{int(address_tag.get('domain')):04x}"
+                bus = f"{int(address_tag.get('bus')):02x}"
+                slot = f"{int(address_tag.get('slot')):02x}"
+                function = f"{int(address_tag.get('function')):x}"
+                pci_str = f"{domain}:{bus}:{slot}.{function}"
+
+                # 5. Get Vendor and Product ID
+                vendor_id = vendor_tag.get('id').replace('0x', '') if vendor_tag is not None and vendor_tag.get('id') else None
+                product_id = product_tag.get('id').replace('0x', '') if product_tag is not None and product_tag.get('id') else None
+
+                devices.append({
+                    'name': f"{vendor_name} - {product_name}",
+                    'pci_id': pci_str,
+                    'bus': bus,
+                    'slot': slot,
+                    'function': function,
+                    'iommu_group': iommu_group,
+                    'vendor_id': vendor_id,
+                    'product_id': product_id
+                })
+                print(f"✅ [Device Scan] Found: {vendor_name} - {product_name} at {pci_str} (IOMMU: {iommu_group})")
 
             except Exception as e:
-                print(f"⚠️ [GPU Scan] Parse Error for {name}: {e}")
+                print(f"⚠️ [Device Scan] Parse Error for {name}: {e}")
 
     except Exception as e:
-        print(f"❌ [GPU Scan] Error: {e}")
+        print(f"❌ [Device Scan] Error: {e}")
     finally:
-        conn.close()
-    
-    # Sort
-    gpus.sort(key=lambda x: x['pci_id'])
-    
-    # SAFETY NET: Keep the hardcode just in case scan still fails
-    if len(gpus) == 0:
-        print("⚠️ [GPU Scan] 0 found. Activating Emergency Fallback.")
-        gpus.append({'name': 'NVIDIA L40S (Fallback 8A)', 'pci_id': '0000:8a:00.0', 'bus': '8a', 'slot': '00', 'function': '0'})
-        gpus.append({'name': 'NVIDIA L40S (Fallback B4)', 'pci_id': '0000:b4:00.0', 'bus': 'b4', 'slot': '00', 'function': '0'})
+        if conn:
+            conn.close()
 
-    return gpus
+    devices.sort(key=lambda x: (x['iommu_group'] or 'zzz', x['pci_id']))
+    return devices
 
 @listing_bp.route('/list', methods=['GET', 'POST'])
 def list_vms():
@@ -275,7 +242,7 @@ def view_vm(uuid):
             info = dom.info()
             
             # Get Host GPUs for the dropdown
-            available_gpus = get_host_gpus()
+            available_devices = get_host_devices()
 
             # Use INACTIVE XML to see configuration
             xml_str = dom.XMLDesc(libvirt.VIR_DOMAIN_XML_INACTIVE)
@@ -352,7 +319,7 @@ def view_vm(uuid):
                         name = "Unknown PCI Device"
                         
                         # Match against our scanned list to get the real name (e.g. NVIDIA L40S)
-                        for g in available_gpus:
+                        for g in available_devices:
                             if g['pci_id'].endswith(f":{bus}:{slot}.{func}"):
                                 name = g['name']
                                 
@@ -423,8 +390,8 @@ def view_vm(uuid):
                 'os_type': dom.OSType(),
                 'interfaces': interfaces,
                 'disks': disks,
-                'host_gpus': hostdevs,        
-                'available_gpus': available_gpus, 
+                'host_devices': hostdevs,
+                'available_devices': available_devices, 
                 'boot_devices': boot_devices,
                 'snapshots': snapshots,
                 'current_boot': current_boot # Keep for reference if needed elsewhere
@@ -620,12 +587,12 @@ def delete_interface(uuid):
         finally: conn.close()
     return redirect(url_for('listing.view_vm', uuid=uuid))
 
-# --- GPU PASSTHROUGH MANAGEMENT ---
+# --- PCI PASSTHROUGH MANAGEMENT ---
 
-@listing_bp.route('/gpu/attach/<uuid>', methods=['POST'])
-def attach_gpu(uuid):
+@listing_bp.route('/device/attach/<uuid>', methods=['POST'])
+def attach_device(uuid):
     pci_id = request.form.get('pci_id') # Expects format "0000:8a:00.0"
-    if not pci_id: return "No GPU selected"
+    if not pci_id: return "No device selected"
     
     # Parse the string back to hex components
     parts = pci_id.split(':')
@@ -652,17 +619,22 @@ def attach_gpu(uuid):
             
             dom.attachDeviceFlags(xml, flags)
         except libvirt.libvirtError as e:
-            return f"<h1>Error Attaching GPU</h1><p>{e}</p><p>Ensure IOMMU is enabled and device is not in use.</p><a href='/view/{uuid}'>Back</a>"
+            return f"<h1>Error Attaching Device</h1><p>{e}</p><p>Ensure IOMMU is enabled and device is not in use.</p><a href='/view/{uuid}'>Back</a>"
         finally:
             conn.close()
             
     return redirect(url_for('listing.view_vm', uuid=uuid))
 
-@listing_bp.route('/gpu/detach/<uuid>', methods=['POST'])
-def detach_gpu(uuid):
-    bus = request.form.get('bus')
-    slot = request.form.get('slot')
-    function = request.form.get('function')
+@listing_bp.route('/device/detach/<uuid>', methods=['POST'])
+def detach_device(uuid):
+    pci_id = request.form.get('pci_id')
+    if not pci_id: return "No device selected"
+
+    parts = pci_id.split(':')
+    bus = f"0x{parts[1]}"
+    slot_func = parts[2].split('.')
+    slot = f"0x{slot_func[0]}"
+    function = f"0x{slot_func[1]}"
     
     xml = f"""
     <hostdev mode='subsystem' type='pci' managed='yes'>

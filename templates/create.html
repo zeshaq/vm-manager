@@ -50,6 +50,30 @@
                         </label>
                     </div>
                     
+                    <div class="mb-3">
+                        <label for="devices" class="form-label">PCI Passthrough Devices:</label>
+                        <select id="devices" name="devices" class="form-select" multiple size="8">
+                            {% set current_iommu_group = '' %}
+                            {% for device in available_devices %}
+                                {% if device.iommu_group != current_iommu_group %}
+                                    {% if not loop.first %}
+                                        </optgroup>
+                                    {% endif %}
+                                    <optgroup label="IOMMU Group {{ device.iommu_group }}">
+                                    {% set current_iommu_group = device.iommu_group %}
+                                {% endif %}
+                                <option value="{{ device.pci_id }}">{{ device.name }} ({{ device.pci_id }})</option>
+                            {% endfor %}
+                            {% if available_devices %}
+                                </optgroup>
+                            {% endif %}
+                        </select>
+                        <div class="form-text">
+                            Select one or more devices to pass through to the VM. 
+                            <strong>Note:</strong> It is highly recommended to pass through all devices within the same IOMMU group.
+                        </div>
+                    </div>
+                    
                     <button type="submit" class="btn btn-success w-100">Define Virtual Machine</button>
                 </form>
             </div>

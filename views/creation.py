@@ -1,9 +1,10 @@
 import libvirt
 from flask import Blueprint, render_template, request, redirect, url_for
+from .listing import get_host_devices
 
 creation_bp = Blueprint('creation', __name__)
 
-def generate_vm_xml(name, memory_mb, vcpus, project=None, host_cpu=False):
+def generate_vm_xml(name, memory_mb, vcpus, project=None, host_cpu=False, devices=None):
     # Convert MB to KiB
     memory_kib = int(memory_mb) * 1024
     
@@ -20,7 +21,25 @@ def generate_vm_xml(name, memory_mb, vcpus, project=None, host_cpu=False):
             <project>{project}</project>
         </metadata>
         """
-        
+    
+    # PCI Passthrough Devices
+    devices_xml = ""
+    if devices:
+        for pci_id in devices:
+            parts = pci_id.split(':')
+            bus = f"0x{parts[1]}"
+            slot_func = parts[2].split('.')
+            slot = f"0x{slot_func[0]}"
+            function = f"0x{slot_func[1]}"
+            
+            devices_xml += f"""
+            <hostdev mode='subsystem' type='pci' managed='yes'>
+              <source>
+                <address domain='0x0000' bus='{bus}' slot='{slot}' function='{function}'/>
+              </source>
+            </hostdev>
+            """
+
     return f"""
     <domain type='kvm'>
       <name>{name}</name>
@@ -46,6 +65,7 @@ def generate_vm_xml(name, memory_mb, vcpus, project=None, host_cpu=False):
         
         <!-- Graphics -->
         <graphics type='vnc' port='-1' autoport='yes' listen='0.0.0.0'/>
+        {devices_xml}
       </devices>
     </domain>
     """
@@ -61,9 +81,12 @@ def create_vm():
             
             # CPU Passthrough Checkbox
             use_host_cpu = request.form.get('host_cpu') == 'on'
+            
+            # Get selected devices
+            selected_devices = request.form.getlist('devices')
 
             # Generate XML
-            xml_config = generate_vm_xml(name, ram, cpu, project, use_host_cpu)
+            xml_config = generate_vm_xml(name, ram, cpu, project, use_host_cpu, selected_devices)
 
             conn = libvirt.open('qemu:///system')
             if conn:
@@ -80,4 +103,6 @@ def create_vm():
         except Exception as e:
             return f"<h1>Error Creating VM</h1><p>{e}</p><a href='/create'>Try Again</a>"
 
-    return render_template('create.html')
+    # GET Request: Fetch devices and render form
+    available_devices = get_host_devices()
+    return render_template('create.html', available_devices=available_devices)
