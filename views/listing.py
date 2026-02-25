@@ -379,11 +379,12 @@ def view_vm(uuid):
                 pass # Snapshots not supported or no snapshots
 
             vm_details = {
-                'uuid': dom.UUIDString(),
-                'name': dom.name(),
-                'project': project,
-                'state': get_vm_state_string(info[0]),
-                'state_code': info[0],
+     'uuid': dom.UUIDString(),
+     'name': dom.name(),
++    'terminal_url': url_for('terminal.terminal', vm_name=dom.name()),
+     'project': project,
+     'state': get_vm_state_string(info[0]),
+     'state_code': info[0],
                 'memory_mb': int(info[1] / 1024),
                 'max_memory_mb': int(info[1] / 1024),
                 'vcpus': info[3],
