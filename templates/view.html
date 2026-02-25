@@ -47,8 +47,7 @@
                     <div class="card-body">
                         <h5 class="card-title">Actions</h5>
                         {% if vm.state_code == 1 %}
-                                            <a href="{{ url_for('listing.console_vm', uuid=vm.uuid) }}" class="btn btn-dark">Open Console</a>
-                <a href="{{ vm.terminal_url }}" class="btn btn-primary" target="_blank">VNC Terminal</a>
+                                            <a href="{{ vm.terminal_url }}" class="btn btn-primary btn-sm" target="_blank">VNC Terminal</a>
                             <a href="{{ url_for('listing.stop_vm', uuid=vm.uuid) }}" onclick="return confirm('Force Stop?');" class="btn btn-danger">Stop VM</a>
                             <a href="{{ url_for('listing.monitor_vm', uuid=vm.uuid) }}" class="btn btn-info">Live Monitor</a>
                         {% else %}
@@ -139,9 +138,69 @@
             });
         </script>
 
-        <!-- Sections for Storage, Network, Devices, Snapshots -->
+        <div class="mb-4">
+            <h3 class="h5">Storage Devices</h3>
+            <div class="table-responsive">
+                <table class="table table-striped table-bordered table-sm">
+                    <thead class="table-light">
+                        <tr>
+                            <th>Device</th>
+                            <th>Source</th>
+                            <th>Type</th>
+                            <th class="text-end">Action</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for item in vm.disks %}
+                        <tr>
+                            <td><strong>{{ item.target }}</strong></td>
+                            <td>{{ item.file }}</td>
+                            <td>{{ item.device }}</td>
+                            <td class="text-end">
+                                <form action="{{ url_for('listing.delete_disk', uuid=vm.uuid) }}" method="POST" class="d-inline">
+                                    <input type="hidden" name="target_dev" value="{{ item.target }}">
+                                    <button type="submit" onclick="return confirm('Detach this disk?')" class="btn btn-outline-danger btn-sm">Detach</button>
+                                </form>
+                            </td>
+                        </tr>
+                        {% else %}
+                        <tr><td colspan="4" class="text-center text-muted p-4">No storage devices found.</td></tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            
+            <!-- Form for Disk Images/ISOs -->
+            <form action="{{ url_for('listing.add_disk', uuid=vm.uuid) }}" method="POST" class="card bg-light mt-3">
+                <div class="card-body">
+                    <div class="row g-2 align-items-center">
+                        <div class="col">
+                            <input type="text" name="file_path" placeholder="/var/lib/libvirt/images/disk.qcow2 or /path/to/image.iso" required class="form-control form-control-sm">
+                        </div>
+                        <div class="col-auto">
+                            <button type="submit" class="btn btn-success btn-sm">+ Add Disk Image/ISO</button>
+                        </div>
+                    </div>
+                </div>
+            </form>
+            
+            <!-- Form for Physical Disks -->
+            <form action="{{ url_for('listing.add_disk', uuid=vm.uuid) }}" method="POST" class="card bg-light mt-2">
+                <div class="card-body">
+                    <div class="row g-2 align-items-center">
+                        <div class="col">
+                            <input type="text" name="file_path" placeholder="/dev/sda" required class="form-control form-control-sm">
+                        </div>
+                        <div class="col-auto">
+                            <button type="submit" class="btn btn-info btn-sm">+ Attach Physical Disk</button>
+                        </div>
+                    </div>
+                </div>
+            </form>
+        </div>
+
+        <!-- Sections for Network, Devices, Snapshots -->
         {% for section_title, items, columns, form_action, form_fields, form_button_text in [
-            ('Storage Devices', vm.disks, ['Device', 'Source', 'Type'], 'listing.add_disk', [('text', 'file_path', '/var/lib/libvirt/images/disk.qcow2')], '+ Add'),
             ('Network Interfaces', vm.interfaces, ['Model', 'Type/Source', 'MAC', 'IP'], 'listing.add_interface', [('select', 'mode', {'network': 'Virtual Network', 'bridge': 'Host Bridge'}), ('text', 'source', 'default')], '+ Attach'),
             ('PCI Passthrough Devices', vm.host_devices, ['Device', 'PCI ID'], 'listing.attach_device', [('select', 'pci_id', vm.available_devices)], '+ Attach Device'),
             ('Snapshots', vm.snapshots, ['Snapshot Name'], 'listing.create_snapshot', [('text', 'snapshot_name', 'e.g., before-update')], '+ Create')
