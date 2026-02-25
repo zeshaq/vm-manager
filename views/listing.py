@@ -280,29 +280,37 @@ def view_vm(uuid):
                 disks.append(disk_data)
 
             # --- 2. Interfaces & Boot Order ---
-            interfaces = []
-            for iface in tree.findall('devices/interface'):
-                mac = iface.find('mac').get('address') if iface.find('mac') is not None else 'N/A'
-                model = iface.find('model').get('type') if iface.find('model') is not None else 'Default'
-                
-                net_source = "Unknown"
-                source = iface.find('source')
-                if source is not None:
-                    net_source = source.get('network') or source.get('bridge') or source.get('dev') or "Unknown"
+# --- 2. Interfaces & Boot Order ---
+interfaces = []
+for iface in tree.findall('devices/interface'):
+    mac = iface.find('mac').get('address') if iface.find('mac') is not None else 'N/A'
+    model = iface.find('model').get('type') if iface.find('model') is not None else 'Default'
 
-                boot = iface.find('boot')
-                if boot is not None:
-                    order = boot.get('order')
-                    if order in ['1', '2']:
-                        current_boot[order] = "network"
+    net_source = "Unknown"
+    source = iface.find('source')
+    if source is not None:
+        net_source = source.get('network') or source.get('bridge') or source.get('dev') or "Unknown"
 
-                interfaces.append({
-                    'mac': mac,
-                    'model': model,
-                    'network': net_source,
-                    'type': iface.get('type'),
-                    'ips': []
-                })
+    # Interface target name (host-side, e.g. vnet0) if present
+    target_dev = "N/A"
+    target = iface.find('target')
+    if target is not None and target.get('dev'):
+        target_dev = target.get('dev')
+
+    boot = iface.find('boot')
+    if boot is not None:
+        order = boot.get('order')
+        if order in ['1', '2']:
+            current_boot[order] = "network"
+
+    interfaces.append({
+        'name': target_dev,
+        'mac': mac,
+        'model': model,
+        'network': net_source,
+        'type': iface.get('type'),
+        'ips': []
+    })
 
             # --- 3. Host GPUs (Passthrough) ---
             hostdevs = []
@@ -332,15 +340,21 @@ def view_vm(uuid):
                         })
 
             # --- 4. Live IPs ---
-            if info[0] == libvirt.VIR_DOMAIN_RUNNING:
-                try:
-                    live_dom = conn.lookupByUUIDString(uuid)
-                    ifaces_info = live_dom.interfaceAddresses(libvirt.VIR_DOMAIN_INTERFACE_ADDRESSES_SRC_LEASE, 0)
-                    for _, val in ifaces_info.items():
-                        for k_iface in interfaces:
-                            if k_iface['mac'] == val.get('hwaddr'):
-                                k_iface['ips'] = [ip['addr'] for ip in val.get('addrs', [])]
-                except: pass
+# --- 4. Live IPs ---
+if info[0] == libvirt.VIR_DOMAIN_RUNNING:
+    try:
+        live_dom = conn.lookupByUUIDString(uuid)
+        ifaces_info = live_dom.interfaceAddresses(libvirt.VIR_DOMAIN_INTERFACE_ADDRESSES_SRC_LEASE, 0)
+
+        for iface_name, val in ifaces_info.items():
+            for k_iface in interfaces:
+                if k_iface['mac'] == val.get('hwaddr'):
+                    k_iface['ips'] = [ip['addr'] for ip in val.get('addrs', [])]
+                    # Prefer the live name (if any) over XML target dev
+                    if iface_name:
+                        k_iface['name'] = iface_name
+    except:
+        pass
 
             # --- 5. Build Boot Device List (for drag-and-drop) ---
             all_boot_options = []
