@@ -61,19 +61,40 @@ import libvirt
 def index():
     conn = libvirt.open('qemu:///system')
     host_info = {}
+
     if conn:
         try:
             # Get Host CPU Info
             node_info = conn.getInfo()
             host_info['cpu_cores'] = node_info[2]
-            
-            # Get Host Memory Info
-            mem_info = conn.getMemoryStats(0)
-            host_info['mem_total_gb'] = round(mem_info['total'] / (1024**2), 2)
-            host_info['mem_free_gb'] = round(mem_info['free'] / (1024**2), 2)
-            host_info['mem_used_gb'] = round(host_info['mem_total_gb'] - host_info['mem_free_gb'], 2)
-            if host_info['mem_total_gb'] > 0:
-                host_info['mem_percent_used'] = round((host_info['mem_used_gb'] / host_info['mem_total_gb']) * 100, 1)
+
+            # -----------------------------
+            # Get Host Memory Info (Option A)
+            # Sum memory across NUMA cells
+            # -----------------------------
+            # getInfo()[4] is NUMA nodes count per libvirt API
+            numa_nodes = int(node_info[4]) if len(node_info) > 4 else 1
+            if numa_nodes <= 0:
+                numa_nodes = 1
+
+            total_kib = 0
+            free_kib = 0
+
+            for cell in range(numa_nodes):
+                stats = conn.getMemoryStats(cell)  # values are KiB
+                total_kib += stats.get('total', 0)
+                free_kib += stats.get('free', 0)
+
+            mem_total_gb = total_kib / (1024**2)  # KiB -> GiB
+            mem_free_gb = free_kib / (1024**2)
+            mem_used_gb = mem_total_gb - mem_free_gb
+
+            host_info['mem_total_gb'] = round(mem_total_gb, 2)
+            host_info['mem_free_gb'] = round(mem_free_gb, 2)
+            host_info['mem_used_gb'] = round(mem_used_gb, 2)
+
+            if mem_total_gb > 0:
+                host_info['mem_percent_used'] = round((mem_used_gb / mem_total_gb) * 100, 1)
             else:
                 host_info['mem_percent_used'] = 0
 
@@ -95,7 +116,7 @@ def index():
             print(f"Error getting host info: {e}")
         finally:
             conn.close()
-            
+
     return render_template('home.html', host=host_info)
 
 if __name__ == '__main__':
