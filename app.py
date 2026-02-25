@@ -1,6 +1,8 @@
 from flask import Flask, session, redirect, url_for, request, render_template
 import simplepam
 import os
+import psutil
+import libvirt
 
 # Import the blueprints
 from views.listing import listing_bp
@@ -54,8 +56,6 @@ def logout():
     session.pop('username', None)
     return redirect(url_for('login'))
 
-import libvirt
-
 # Simple route for the root URL
 @app.route('/')
 def index():
@@ -68,11 +68,20 @@ def index():
             node_info = conn.getInfo()
             host_info['cpu_cores'] = node_info[2]
 
+            # CPU usage (host)
+            # Small interval gives an immediate, accurate reading
+            host_info['cpu_percent'] = round(psutil.cpu_percent(interval=0.2), 1)
+
+            # Load averages (Linux)
+            la1, la5, la15 = os.getloadavg()
+            host_info['load_1'] = round(la1, 2)
+            host_info['load_5'] = round(la5, 2)
+            host_info['load_15'] = round(la15, 2)
+
             # -----------------------------
-            # Get Host Memory Info (Option A)
+            # Memory Info (Option A)
             # Sum memory across NUMA cells
             # -----------------------------
-            # getInfo()[4] is NUMA nodes count per libvirt API
             numa_nodes = int(node_info[4]) if len(node_info) > 4 else 1
             if numa_nodes <= 0:
                 numa_nodes = 1
@@ -81,11 +90,11 @@ def index():
             free_kib = 0
 
             for cell in range(numa_nodes):
-                stats = conn.getMemoryStats(cell)  # values are KiB
+                stats = conn.getMemoryStats(cell)  # KiB
                 total_kib += stats.get('total', 0)
                 free_kib += stats.get('free', 0)
 
-            mem_total_gb = total_kib / (1024**2)  # KiB -> GiB
+            mem_total_gb = total_kib / (1024**2)  # KiB -> GiB (displayed as GB in UI)
             mem_free_gb = free_kib / (1024**2)
             mem_used_gb = mem_total_gb - mem_free_gb
 

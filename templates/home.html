@@ -9,7 +9,27 @@
             <div class="card h-100">
                 <div class="card-body">
                     <h3 class="card-title text-primary">CPU</h3>
-                    <p class="display-4 fw-bold">{{ host.cpu_cores }} <span class="fs-4 fw-normal">Cores</span></p>
+
+                    <p class="display-4 fw-bold">
+                        {{ host.cpu_cores }} <span class="fs-4 fw-normal">Cores</span>
+                    </p>
+
+                    <p class="fs-5 mb-2">
+                        <strong>{{ host.cpu_percent }}%</strong> usage
+                    </p>
+
+                    <div class="progress" style="height: 20px;">
+                        <div class="progress-bar bg-primary"
+                             role="progressbar"
+                             style="width: {{ host.cpu_percent }}%;"
+                             aria-valuenow="{{ host.cpu_percent }}"
+                             aria-valuemin="0"
+                             aria-valuemax="100"></div>
+                    </div>
+
+                    <small class="text-muted mt-1 d-block">
+                        Load: {{ host.load_1 }}, {{ host.load_5 }}, {{ host.load_15 }}
+                    </small>
                     <small class="text-muted">Total logical cores available to the hypervisor.</small>
                 </div>
             </div>
@@ -24,7 +44,11 @@
                         <strong>{{ host.mem_used_gb }} GB</strong> used of <strong>{{ host.mem_total_gb }} GB</strong>
                     </p>
                     <div class="progress" style="height: 20px;">
-                        <div class="progress-bar bg-success" role="progressbar" style="width: {{ host.mem_percent_used }}%;" aria-valuenow="{{ host.mem_percent_used }}" aria-valuemin="0" aria-valuemax="100"></div>
+                        <div class="progress-bar bg-success" role="progressbar"
+                             style="width: {{ host.mem_percent_used }}%;"
+                             aria-valuenow="{{ host.mem_percent_used }}"
+                             aria-valuemin="0"
+                             aria-valuemax="100"></div>
                     </div>
                     <small class="text-muted mt-1 d-block">{{ host.mem_free_gb }} GB Free</small>
                 </div>
@@ -45,7 +69,11 @@
                     </div>
                     {% set pool_percent_used = (pool.allocation_gb / pool.capacity_gb * 100) if pool.capacity_gb > 0 else 0 %}
                     <div class="progress" style="height: 15px;">
-                        <div class="progress-bar bg-warning" role="progressbar" style="width: {{ pool_percent_used }}%;" aria-valuenow="{{ pool_percent_used }}" aria-valuemin="0" aria-valuemax="100"></div>
+                        <div class="progress-bar bg-warning" role="progressbar"
+                             style="width: {{ pool_percent_used }}%;"
+                             aria-valuenow="{{ pool_percent_used }}"
+                             aria-valuemin="0"
+                             aria-valuemax="100"></div>
                     </div>
                     <small class="text-muted">Available: {{ pool.available_gb }} GB</small>
                 </div>
@@ -60,7 +88,10 @@
         <a href="/list" class="btn btn-primary">View Virtual Machines</a>
         <a href="/create" class="btn btn-success">Create New VM</a>
         <form action="/stop_all" method="post" class="d-inline">
-            <button type="submit" class="btn btn-danger" onclick="return confirm('Are you sure you want to stop all running VMs?');">Stop All VMs</button>
+            <button type="submit" class="btn btn-danger"
+                    onclick="return confirm('Are you sure you want to stop all running VMs?');">
+                Stop All VMs
+            </button>
         </form>
     </div>
 {% endblock %}
