@@ -381,7 +381,7 @@ def view_vm(uuid):
             vm_details = {
      'uuid': dom.UUIDString(),
      'name': dom.name(),
-+    'terminal_url': url_for('terminal.terminal', vm_name=dom.name()),
+     'terminal_url': url_for('terminal.terminal', vm_name=dom.name()),
      'project': project,
      'state': get_vm_state_string(info[0]),
      'state_code': info[0],
