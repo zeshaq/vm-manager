@@ -204,7 +204,7 @@
 
         <!-- Sections for Network, Devices, Snapshots -->
         {% for section_title, items, columns, form_action, form_fields, form_button_text in [
-            ('Network Interfaces', vm.interfaces, ['Name', 'Model', 'Type/Source', 'MAC', 'IP'], 'listing.add_interface', [('select', 'mode', {'network': 'Virtual Network', 'bridge': 'Host Bridge'}), ('text', 'source', 'default')], '+ Attach'),
+            ('Network Interfaces', vm.interfaces, ['Model', 'Type/Source', 'MAC', 'IP'], 'listing.add_interface', [('select', 'mode', {'network': 'Virtual Network', 'bridge': 'Host Bridge'}), ('text', 'source', 'default')], '+ Attach'),
             ('PCI Passthrough Devices', vm.host_devices, ['Device', 'PCI ID'], 'listing.attach_device', [('select', 'pci_id', vm.available_devices)], '+ Attach Device'),
             ('Snapshots', vm.snapshots, ['Snapshot Name'], 'listing.create_snapshot', [('text', 'snapshot_name', 'e.g., before-update')], '+ Create')
         ] %}
@@ -225,7 +225,6 @@
                         <tr>
                             {% for col in columns %}
                                 <td>
-                                    {% if col == 'Name' %}<strong>{{ item.name }}</strong>{% endif %}
                                     {% if col == 'Device' %}<strong>{{ item.target or item.name }}</strong>{% endif %}
                                     {% if col == 'Source' %}{{ item.file }}{% endif %}
                                     {% if col == 'Type' %}{{ item.device }}{% endif %}
