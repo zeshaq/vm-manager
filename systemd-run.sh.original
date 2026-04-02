@@ -6,11 +6,10 @@ After=network.target
 [Service]
 Type=simple
 User=ze
-# Corrected paths to include /home/
-WorkingDirectory=/home/ze/vm-manager
-Environment="PATH=/home/ze/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+WorkingDirectory=/ze/vm-manager
+Environment="PATH=/ze/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 Environment="PYTHONUNBUFFERED=1"
-ExecStart=/home/ze/venv/bin/python /home/ze/vm-manager/app.py
+ExecStart=/ze/venv/bin/python /ze/vm-manager/app.py
 Restart=always
 RestartSec=3
 
