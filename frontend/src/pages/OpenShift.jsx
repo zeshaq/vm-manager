@@ -1,9 +1,10 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
+import { useNavigate } from 'react-router-dom'
 import {
   Boxes, ChevronRight, ChevronLeft, CheckCircle, XCircle,
   AlertTriangle, Loader2, RefreshCw, Download, Server,
   Cpu, MemoryStick, HardDrive, Network, Key, Lock,
-  Shield, Terminal, ExternalLink, Copy, Check, Save, Trash2
+  Shield, Terminal, ExternalLink, Copy, Check, Save, Trash2, ArrowLeft
 } from 'lucide-react'
 import api from '../api'
 
@@ -975,9 +976,9 @@ const DEFAULTS = {
 }
 
 export default function OpenShiftPage() {
+  const navigate              = useNavigate()
   const [step, setStep]       = useState(0)
   const [form, setForm]       = useState(() => {
-    // Pre-fill from saved credentials on first render
     const saved = loadSavedCreds()
     return {
       ...DEFAULTS,
@@ -986,7 +987,6 @@ export default function OpenShiftPage() {
       ssh_public_key: saved.ssh_public_key || '',
     }
   })
-  const [jobId, setJobId]     = useState(null)
   const [deploying, setDep]   = useState(false)
   const [error, setError]     = useState('')
 
@@ -997,8 +997,8 @@ export default function OpenShiftPage() {
     setError('')
     try {
       const r = await api.post('/openshift/deploy', form)
-      setJobId(r.data.job_id)
-      setStep(6)
+      // Navigate to the job detail page
+      navigate(`/openshift/jobs/${r.data.job_id}`)
     } catch (e) {
       setError(e.response?.data?.error || 'Failed to start deployment')
     } finally {
@@ -1012,17 +1012,21 @@ export default function OpenShiftPage() {
     <div className="max-w-3xl">
       {/* Header */}
       <div className="flex items-center gap-4 mb-6">
+        <button onClick={() => navigate('/openshift')}
+          className="p-2 rounded-md text-slate-400 hover:text-sky-400 hover:bg-navy-700 transition-colors">
+          <ArrowLeft size={16} />
+        </button>
         <div className="p-3 bg-red-500/10 rounded-xl">
           <Boxes size={22} className="text-red-400" />
         </div>
         <div>
-          <h1 className="text-slate-100 font-bold text-xl">OpenShift Deployment</h1>
+          <h1 className="text-slate-100 font-bold text-xl">New OpenShift Deployment</h1>
           <p className="text-slate-400 text-sm">Deploy SNO or multi-node OCP on KVM via Assisted Installer</p>
         </div>
       </div>
 
       {/* Step bar */}
-      {step < 6 && <StepBar current={step} />}
+      <StepBar current={step} />
 
       {/* Error */}
       {error && (
@@ -1040,13 +1044,7 @@ export default function OpenShiftPage() {
         {step === 3 && <StepNodes     {...stepProps} onBack={() => setStep(2)} onNext={() => setStep(4)} />}
         {step === 4 && <StepNetwork   {...stepProps} onBack={() => setStep(3)} onNext={() => setStep(5)} />}
         {step === 5 && <StepReview    form={form} onBack={() => setStep(4)} onDeploy={deploy} deploying={deploying} />}
-        {step === 6 && jobId && <StepProgress jobId={jobId} onRetry={() => { setStep(5) }} />}
       </div>
-
-      {/* Past deployments (shown on step 0 only) */}
-      {step === 0 && (
-        <PastDeployments onResume={id => { setJobId(id); setStep(6) }} />
-      )}
     </div>
   )
 }
