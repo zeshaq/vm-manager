@@ -39,7 +39,7 @@ step()    { echo -e "\n${BOLD}────────────────�
 # ── pre-flight checks ─────────────────────────────────────────────────────────
 [[ $EUID -ne 0 ]] && die "Run with sudo:  sudo bash install.sh"
 
-step "1/8  Pre-flight checks"
+step "1/9  Pre-flight checks"
 
 # OS check
 if ! grep -qiE 'ubuntu' /etc/os-release 2>/dev/null; then
@@ -63,7 +63,7 @@ info    "Listening port: ${APP_PORT}"
 info    "Repo          : ${REPO_URL}"
 
 # ── system packages ───────────────────────────────────────────────────────────
-step "2/8  Installing system packages"
+step "2/9  Installing system packages"
 
 apt-get update -qq
 
@@ -76,14 +76,18 @@ PACKAGES=(
   # Build deps for libvirt-python
   pkg-config gcc
   # Tools
-  git curl
+  git curl wget
+  # Kubernetes deployment support
+  cloud-image-utils   # cloud-localds — build cloud-init ISOs
+  qemu-utils          # qemu-img — thin-provision VM disks
+  openssh-client      # ssh + ssh-keygen — cluster node access
 )
 
 apt-get install -y "${PACKAGES[@]}"
 success "System packages installed"
 
 # ── libvirt service ───────────────────────────────────────────────────────────
-step "3/8  Enabling libvirt"
+step "3/9  Enabling libvirt"
 
 systemctl enable --now libvirtd
 systemctl is-active --quiet libvirtd && success "libvirtd is running" \
@@ -94,7 +98,7 @@ virsh net-autostart default 2>/dev/null || true
 virsh net-start   default 2>/dev/null || true
 
 # ── user groups ───────────────────────────────────────────────────────────────
-step "4/8  Configuring user groups"
+step "4/9  Configuring user groups"
 
 for grp in libvirt kvm; do
   if getent group "$grp" &>/dev/null; then
@@ -106,7 +110,7 @@ for grp in libvirt kvm; do
 done
 
 # ── storage directory ─────────────────────────────────────────────────────────
-step "5/8  Fixing storage directory permissions"
+step "5/9  Fixing storage directory permissions"
 
 STORAGE="/var/lib/libvirt/images"
 mkdir -p "$STORAGE"
@@ -114,8 +118,24 @@ chown root:libvirt "$STORAGE"
 chmod 775 "$STORAGE"
 success "${STORAGE} → root:libvirt 775"
 
+# ── Ubuntu cloud base image ───────────────────────────────────────────────────
+step "6/9  Downloading Ubuntu 22.04 cloud base image"
+
+BASE_IMAGE="${STORAGE}/ubuntu-22.04-cloudimg.img"
+BASE_IMAGE_URL="https://cloud-images.ubuntu.com/jammy/current/jammy-server-cloudimg-amd64.img"
+
+if [[ -f "$BASE_IMAGE" ]]; then
+  info "Base image already exists at ${BASE_IMAGE} — skipping download"
+  info "To refresh: wget -O ${BASE_IMAGE} ${BASE_IMAGE_URL}"
+else
+  info "Downloading Ubuntu 22.04 cloud image (~600 MB) …"
+  wget -q --show-progress -O "$BASE_IMAGE" "$BASE_IMAGE_URL" \
+    && success "Base image saved to ${BASE_IMAGE}" \
+    || warn "Download failed — Kubernetes deployment will not work until the image is present."
+fi
+
 # ── clone / update repo ───────────────────────────────────────────────────────
-step "6/8  Cloning repository"
+step "7/9  Cloning repository"
 
 if [[ -d "$APP_DIR/.git" ]]; then
   info "Repo already exists — pulling latest"
@@ -126,7 +146,7 @@ fi
 success "Repository ready at ${APP_DIR}"
 
 # ── Python venv + dependencies ────────────────────────────────────────────────
-step "7/8  Creating virtualenv and installing Python dependencies"
+step "8/9  Creating virtualenv and installing Python dependencies"
 
 sudo -u "$INSTALL_USER" python3 -m venv "$VENV_DIR"
 sudo -u "$INSTALL_USER" "$VENV_DIR/bin/pip" install --upgrade pip -q
@@ -134,7 +154,7 @@ sudo -u "$INSTALL_USER" "$VENV_DIR/bin/pip" install -r "$APP_DIR/requirements.tx
 success "Python dependencies installed"
 
 # ── systemd service ───────────────────────────────────────────────────────────
-step "8/8  Installing systemd service"
+step "9/9  Installing systemd service"
 
 # Generate a stable secret key
 SECRET_KEY=$(python3 -c "import secrets; print(secrets.token_hex(32))")

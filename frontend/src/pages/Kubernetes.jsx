@@ -60,33 +60,45 @@ function PrereqBadge({ ok, label }) {
 function PrereqCard({ prereqs }) {
   if (!prereqs) return null
   const items = [
-    { key: 'base_image',    label: `Base image (${prereqs.base_image_path})` },
-    { key: 'iso_tool',      label: 'ISO tool (cloud-localds / genisoimage)' },
-    { key: 'qemu_img',      label: 'qemu-img' },
-    { key: 'libvirt',       label: 'libvirt-python' },
-    { key: 'ssh',           label: 'ssh client' },
+    { key: 'base_image', label: `Base image (${prereqs.base_image_path})` },
+    { key: 'iso_tool',   label: 'ISO tool (cloud-localds / genisoimage)' },
+    { key: 'qemu_img',   label: 'qemu-img' },
+    { key: 'libvirt',    label: 'libvirt-python' },
+    { key: 'ssh',        label: 'ssh client' },
   ]
+  const failing = items.filter(({ key }) => !prereqs[key])
   if (prereqs.ready) return null    // hide when all good
   return (
     <Card className="mb-6 border-amber-500/40 bg-amber-500/5">
       <div className="flex gap-3">
         <AlertTriangle size={20} className="text-amber-400 flex-shrink-0 mt-0.5" />
-        <div>
-          <p className="text-amber-300 font-semibold mb-2">Prerequisites missing</p>
+        <div className="flex-1">
+          <p className="text-amber-300 font-semibold mb-1">Prerequisites missing</p>
           <p className="text-slate-400 text-sm mb-3">
-            Some requirements are not met. Cluster creation will fail until all items are ready.
+            The following items are needed before you can deploy a cluster:
           </p>
-          <div className="flex flex-wrap gap-2">
-            {items.map(({ key, label }) => (
-              <PrereqBadge key={key} ok={prereqs[key]} label={label} />
+          <div className="flex flex-wrap gap-2 mb-3">
+            {failing.map(({ key, label }) => (
+              <span key={key} className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium border text-red-400 bg-red-400/10 border-red-400/30">
+                <XCircle size={11}/>{label}
+              </span>
             ))}
           </div>
-          <p className="text-slate-500 text-xs mt-3">
-            Install missing tools: <code className="text-sky-400">sudo apt install cloud-image-utils qemu-utils</code>
-          </p>
-          <p className="text-slate-500 text-xs mt-1">
-            Download base image: <code className="text-sky-400">wget -O /var/lib/libvirt/images/ubuntu-22.04-cloudimg.img https://cloud-images.ubuntu.com/jammy/current/jammy-server-cloudimg-amd64.img</code>
-          </p>
+          {(!prereqs.iso_tool) && (
+            <p className="text-slate-500 text-xs">
+              Install ISO tools: <code className="text-sky-400">sudo apt install cloud-image-utils</code>
+            </p>
+          )}
+          {(!prereqs.qemu_img) && (
+            <p className="text-slate-500 text-xs mt-1">
+              Install qemu-utils: <code className="text-sky-400">sudo apt install qemu-utils</code>
+            </p>
+          )}
+          {(!prereqs.base_image) && (
+            <p className="text-slate-500 text-xs mt-1">
+              Download base image: <code className="text-sky-400 break-all">wget -O /var/lib/libvirt/images/ubuntu-22.04-cloudimg.img https://cloud-images.ubuntu.com/jammy/current/jammy-server-cloudimg-amd64.img</code>
+            </p>
+          )}
         </div>
       </div>
     </Card>
