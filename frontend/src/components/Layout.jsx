@@ -16,6 +16,7 @@ import {
 const navItems = [
   { to: '/', label: 'Host Info', icon: Cpu, exact: true },
   { to: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
+  { to: '/metrics', label: 'Metrics', icon: Activity },
   { to: '/vms', label: 'Virtual Machines', icon: Server },
   { to: '/vms/create', label: 'Create VM', icon: PlusCircle },
   { to: '/storage', label: 'Storage', icon: HardDrive },
@@ -57,6 +58,7 @@ export default function Layout({ children, username, onLogout }) {
     if (p.startsWith('/vms/')) return 'VM Detail'
     if (p === '/storage') return 'Storage'
     if (p === '/docker') return 'Docker'
+    if (p === '/metrics') return 'Metrics'
     if (p === '/network') return 'Network'
     if (p === '/projects') return 'Projects'
     return 'VM Manager'
