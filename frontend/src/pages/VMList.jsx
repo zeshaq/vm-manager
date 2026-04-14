@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
-import { Play, Square, Trash2, Eye, PlusCircle, RefreshCw, Filter, Monitor } from 'lucide-react'
+import { Play, Square, Trash2, Eye, PlusCircle, RefreshCw, Monitor } from 'lucide-react'
 import api from '../api'
 
 function StateBadge({ state }) {
@@ -24,7 +24,6 @@ export default function VMList() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [selected, setSelected] = useState([])
-  const [projectFilter, setProjectFilter] = useState('')
   const [actionLoading, setActionLoading] = useState({})
   const navigate = useNavigate()
 
@@ -38,8 +37,7 @@ export default function VMList() {
 
   useEffect(() => { fetchVMs() }, [])
 
-  const projects = [...new Set(vms.map(v => v.project).filter(p => p && p !== 'N/A'))]
-  const filtered = projectFilter ? vms.filter(v => v.project === projectFilter) : vms
+  const filtered = vms
 
   const setLoading_ = (uuid, val) => setActionLoading(prev => ({ ...prev, [uuid]: val }))
 
@@ -102,17 +100,6 @@ export default function VMList() {
             <RefreshCw size={14} /> Refresh
           </button>
         </div>
-        <div className="flex items-center gap-2">
-          <Filter size={14} className="text-slate-400" />
-          <select
-            value={projectFilter}
-            onChange={e => setProjectFilter(e.target.value)}
-            className="bg-navy-800 border border-navy-400 text-slate-200 focus:border-sky-500 focus:outline-none rounded-md px-3 py-2 text-sm"
-          >
-            <option value="">All Projects</option>
-            {projects.map(p => <option key={p} value={p}>{p}</option>)}
-          </select>
-        </div>
       </div>
 
       {/* Bulk actions */}
@@ -154,7 +141,6 @@ export default function VMList() {
                   />
                 </th>
                 <th className="px-4 py-3 text-left">Name</th>
-                <th className="px-4 py-3 text-left">Project</th>
                 <th className="px-4 py-3 text-left">State</th>
                 <th className="px-4 py-3 text-right">Memory</th>
                 <th className="px-4 py-3 text-right">vCPUs</th>
@@ -177,7 +163,6 @@ export default function VMList() {
                       {vm.name}
                     </Link>
                   </td>
-                  <td className="px-4 py-3 text-slate-400">{vm.project || 'N/A'}</td>
                   <td className="px-4 py-3"><StateBadge state={vm.state} /></td>
                   <td className="px-4 py-3 text-right text-slate-300">{vm.memory_mb} MB</td>
                   <td className="px-4 py-3 text-right text-slate-300">{vm.vcpus}</td>
@@ -206,7 +191,7 @@ export default function VMList() {
                         <Eye size={13} />
                       </Link>
                       {vm.state_code === 1 && (
-                        <a href={`/console/${vm.uuid}`} target="_blank" rel="noopener noreferrer"
+                        <a href={`/vnc/${vm.uuid}`} target="_blank" rel="noopener noreferrer"
                           title="VNC Console"
                           className="p-1.5 rounded bg-sky-900/60 hover:bg-sky-800 text-sky-400 transition-colors">
                           <Monitor size={13} />

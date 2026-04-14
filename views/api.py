@@ -14,7 +14,6 @@ from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 
 from .listing import get_db_connection, get_vm_state_string, get_host_devices, parse_pci_id
-from . import project_utils
 from .creation import generate_vm_xml
 
 api_bp = Blueprint('api', __name__, url_prefix='/api')
@@ -180,13 +179,10 @@ def list_vms():
         for domain in domains:
             xml_str = domain.XMLDesc(0)
             tree = ET.fromstring(xml_str)
-            project_tag = tree.find('metadata/project')
-            project = project_tag.text if project_tag is not None else 'N/A'
             info = domain.info()
             vms_list.append({
                 'uuid': domain.UUIDString(),
                 'name': domain.name(),
-                'project': project,
                 'state': get_vm_state_string(info[0]),
                 'state_code': info[0],
                 'memory_mb': int(info[1] / 1024),
@@ -211,9 +207,10 @@ def create_vm():
     name = str(data.get('name', '')).strip()
     ram = data.get('ram')
     cpu = data.get('cpu')
-    project = data.get('project')
     host_cpu = data.get('host_cpu', False)
     devices = data.get('devices', [])
+    disk_path = str(data.get('disk_path', '')).strip() or None
+    disk_size_gb = data.get('disk_size_gb', 20)
 
     if not name or not ram or not cpu:
         return jsonify({'error': 'Missing required fields: name, ram, cpu'}), 400
@@ -222,26 +219,69 @@ def create_vm():
     try:
         ram = int(ram)
         cpu = int(cpu)
+        disk_size_gb = int(disk_size_gb)
         if ram < 64 or ram > 1048576:
             return jsonify({'error': 'RAM must be between 64 MB and 1 TB'}), 400
         if cpu < 1 or cpu > 256:
             return jsonify({'error': 'CPU count must be between 1 and 256'}), 400
+        if disk_size_gb < 1 or disk_size_gb > 65536:
+            return jsonify({'error': 'Disk size must be between 1 and 65536 GB'}), 400
     except (ValueError, TypeError):
-        return jsonify({'error': 'ram and cpu must be integers'}), 400
+        return jsonify({'error': 'ram, cpu, and disk_size_gb must be integers'}), 400
 
+    # Resolve the OS disk path -------------------------------------------------
+    actual_disk_path = None
+    overlay_created = None  # track so we can clean up on failure
+
+    if disk_path:
+        if not os.path.exists(disk_path):
+            return jsonify({'error': f'Disk image not found: {disk_path}'}), 422
+
+        if disk_path.lower().endswith('.iso'):
+            # ISO → attach directly as cdrom (read-only, safe to share)
+            actual_disk_path = disk_path
+        else:
+            # Cloud / disk image → create a per-VM qcow2 overlay so the base
+            # image is never modified and multiple VMs can share the same base.
+            safe_name = re.sub(r'[^a-zA-Z0-9._-]', '_', name)
+            overlay_path = os.path.join(STORAGE_PATH, f"{safe_name}-os.qcow2")
+            if os.path.exists(overlay_path):
+                return jsonify({'error': f'OS disk already exists: {os.path.basename(overlay_path)}'}), 409
+            try:
+                cmd = [
+                    'qemu-img', 'create',
+                    '-f', 'qcow2',
+                    '-b', disk_path,
+                    '-F', 'qcow2',
+                    overlay_path,
+                    f"{disk_size_gb}G",
+                ]
+                result = subprocess.run(cmd, check=True, capture_output=True, text=True)
+                current_app.logger.info(f"Created overlay disk: {overlay_path} backing {disk_path}")
+                actual_disk_path = overlay_path
+                overlay_created = overlay_path
+            except subprocess.CalledProcessError as exc:
+                return jsonify({'error': f'Failed to create disk overlay: {exc.stderr.strip()}'}), 500
+
+    # Define the VM ------------------------------------------------------------
     try:
-        xml_config = generate_vm_xml(name, ram, cpu, project, host_cpu, devices)
+        xml_config = generate_vm_xml(name, ram, cpu, None, host_cpu, devices, actual_disk_path)
         conn = libvirt.open('qemu:///system')
         if not conn:
-            return jsonify({'error': 'Could not connect to hypervisor'}), 500
+            raise RuntimeError('Could not connect to hypervisor')
         dom = conn.defineXML(xml_config)
         new_uuid = dom.UUIDString()
         conn.close()
-        current_app.logger.info(f"VM created: {name} by {session.get('username')}")
+        current_app.logger.info(f"VM created: {name} ({new_uuid}) by {session.get('username')}")
         return jsonify({'uuid': new_uuid}), 201
     except libvirt.libvirtError as e:
+        # Roll back overlay if we just created it
+        if overlay_created and os.path.exists(overlay_created):
+            os.remove(overlay_created)
         return jsonify({'error': str(e)}), 500
     except Exception:
+        if overlay_created and os.path.exists(overlay_created):
+            os.remove(overlay_created)
         current_app.logger.exception("Unexpected error creating VM")
         return jsonify({'error': 'Failed to create VM'}), 500
 
@@ -263,9 +303,6 @@ def get_vm(uuid):
 
         xml_str = dom.XMLDesc(libvirt.VIR_DOMAIN_XML_INACTIVE)
         tree = ET.fromstring(xml_str)
-
-        project_tag = tree.find('metadata/project')
-        project = project_tag.text if project_tag is not None else 'N/A'
 
         # Disks
         disks = []
@@ -369,7 +406,6 @@ def get_vm(uuid):
         vm_details = {
             'uuid': dom.UUIDString(),
             'name': dom.name(),
-            'project': project,
             'state': get_vm_state_string(info[0]),
             'state_code': info[0],
             'memory_mb': int(info[1] / 1024),
@@ -399,7 +435,6 @@ def update_vm(uuid):
     data = request.get_json() or {}
     new_cpu = data.get('cpu')
     new_ram_mb = data.get('ram')
-    new_project = data.get('project')
 
     conn = get_db_connection()
     if not conn:
@@ -425,19 +460,6 @@ def update_vm(uuid):
             vcpu = tree.find('vcpu')
             if vcpu is not None:
                 vcpu.text = str(int(new_cpu))
-
-        if new_project is not None:
-            meta = tree.find('metadata')
-            if meta is None and new_project:
-                meta = ET.SubElement(tree, 'metadata')
-            project_tag = meta.find('project') if meta is not None else None
-            if new_project:
-                if project_tag is not None:
-                    project_tag.text = new_project
-                else:
-                    ET.SubElement(meta, 'project').text = new_project
-            elif project_tag is not None:
-                meta.remove(project_tag)
 
         conn.defineXML(ET.tostring(tree).decode())
         return jsonify({'success': True})
@@ -1277,84 +1299,6 @@ def create_and_attach_disk(uuid):
         return jsonify({'error': str(e)}), 500
     finally:
         conn.close()
-
-
-# ---------------------------------------------------------------------------
-# Projects
-# ---------------------------------------------------------------------------
-
-@api_bp.route('/projects', methods=['GET'])
-def list_projects():
-    err = require_auth()
-    if err:
-        return err
-
-    projects_data = project_utils.load_projects()
-    conn = libvirt.open('qemu:///system')
-    vms_by_project = {}
-
-    if conn:
-        for project, vm_uuids in projects_data.items():
-            vms_by_project[project] = []
-            for uuid in vm_uuids:
-                try:
-                    domain = conn.lookupByUUIDString(uuid)
-                    vms_by_project[project].append({'name': domain.name(), 'uuid': uuid})
-                except libvirt.libvirtError:
-                    pass
-        conn.close()
-
-    return jsonify({'projects': vms_by_project})
-
-
-@api_bp.route('/projects', methods=['POST'])
-def create_project():
-    err = require_auth()
-    if err:
-        return err
-
-    data = request.get_json() or {}
-    project_name = data.get('project_name')
-    if not project_name:
-        return jsonify({'error': 'project_name is required'}), 400
-
-    project_utils.add_project(project_name)
-    return jsonify({'success': True}), 201
-
-
-@api_bp.route('/projects/<name>', methods=['DELETE'])
-def delete_project(name):
-    err = require_auth()
-    if err:
-        return err
-
-    project_utils.remove_project(name)
-    return jsonify({'success': True})
-
-
-@api_bp.route('/projects/<name>/vms', methods=['POST'])
-def add_vm_to_project(name):
-    err = require_auth()
-    if err:
-        return err
-
-    data = request.get_json() or {}
-    vm_uuid = data.get('vm_uuid')
-    if not vm_uuid:
-        return jsonify({'error': 'vm_uuid is required'}), 400
-
-    project_utils.add_vm_to_project(name, vm_uuid)
-    return jsonify({'success': True})
-
-
-@api_bp.route('/projects/<name>/vms/<vm_uuid>', methods=['DELETE'])
-def remove_vm_from_project(name, vm_uuid):
-    err = require_auth()
-    if err:
-        return err
-
-    project_utils.remove_vm_from_project(name, vm_uuid)
-    return jsonify({'success': True})
 
 
 # ---------------------------------------------------------------------------

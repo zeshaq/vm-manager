@@ -11,7 +11,6 @@ from views.storage import storage_bp
 from views.terminal import terminal_bp
 from views.host_terminal import host_terminal_bp
 from views.dashboard import dashboard_bp
-from views.projects import projects_bp
 from views.api import api_bp, limiter
 from views.docker_mgmt import docker_bp
 from views.docker_exec import docker_exec_bp
@@ -20,6 +19,7 @@ from views.metrics import metrics_bp
 from views.files import files_bp
 from views.kubernetes import k8s_bp
 from views.images import images_bp
+from views.console import console_bp
 
 from sockets import sock
 
@@ -66,7 +66,6 @@ app.register_blueprint(storage_bp)
 app.register_blueprint(terminal_bp)
 app.register_blueprint(host_terminal_bp)
 app.register_blueprint(dashboard_bp)
-app.register_blueprint(projects_bp)
 app.register_blueprint(api_bp)
 app.register_blueprint(docker_bp)
 app.register_blueprint(docker_exec_bp)
@@ -75,6 +74,7 @@ app.register_blueprint(metrics_bp)
 app.register_blueprint(files_bp)
 app.register_blueprint(k8s_bp)
 app.register_blueprint(images_bp)
+app.register_blueprint(console_bp)
 
 @app.route('/login')
 @app.route('/logout')

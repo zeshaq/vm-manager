@@ -9,7 +9,6 @@ import VMDetail from './pages/VMDetail'
 import CreateVM from './pages/CreateVM'
 import EditVM from './pages/EditVM'
 import Storage from './pages/Storage'
-import Projects from './pages/Projects'
 import Dashboard from './pages/Dashboard'
 import Monitor from './pages/Monitor'
 import Docker from './pages/Docker'
@@ -52,9 +51,9 @@ export default function App() {
   return (
     <Routes>
       <Route path="/login" element={<Login onLogin={() => api.get('/auth/check').then(r => setAuthState(r.data))} />} />
-      {/* Console is full-screen — outside Layout */}
+      {/* VNC console is full-screen — outside Layout */}
       <Route
-        path="/console/:uuid"
+        path="/vnc/:uuid"
         element={
           <PrivateRoute authState={authState}>
             <Console />
@@ -80,7 +79,6 @@ export default function App() {
                 <Route path="/files"      element={<Files />} />
                 <Route path="/kubernetes" element={<Kubernetes />} />
                 <Route path="/images"     element={<Images />} />
-                <Route path="/projects" element={<Projects />} />
                 <Route path="/dashboard" element={<Dashboard />} />
                 <Route path="*" element={<Navigate to="/" replace />} />
               </Routes>

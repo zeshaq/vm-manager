@@ -6,7 +6,7 @@ import api from '../api'
 export default function EditVM() {
   const { uuid } = useParams()
   const navigate = useNavigate()
-  const [form, setForm] = useState({ ram: '', cpu: '', project: '' })
+  const [form, setForm] = useState({ ram: '', cpu: '' })
   const [vmName, setVmName] = useState('')
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
@@ -16,11 +16,7 @@ export default function EditVM() {
     api.get(`/vms/${uuid}`)
       .then(r => {
         setVmName(r.data.name)
-        setForm({
-          ram: r.data.memory_mb,
-          cpu: r.data.vcpus,
-          project: r.data.project === 'N/A' ? '' : (r.data.project || ''),
-        })
+        setForm({ ram: r.data.memory_mb, cpu: r.data.vcpus })
       })
       .catch(e => setError(e.response?.data?.error || 'Failed to load VM'))
       .finally(() => setLoading(false))
@@ -36,7 +32,6 @@ export default function EditVM() {
       await api.put(`/vms/${uuid}`, {
         ram: parseInt(form.ram),
         cpu: parseInt(form.cpu),
-        project: form.project || null,
       })
       navigate(`/vms/${uuid}`)
     } catch (err) {
@@ -77,7 +72,9 @@ export default function EditVM() {
                 className="w-full bg-navy-800 border border-navy-400 text-slate-200 focus:border-sky-500 focus:outline-none rounded-md px-3 py-2"
                 required
               />
-              {form.ram && <p className="text-slate-500 text-xs mt-1">{Math.round(form.ram / 1024 * 10) / 10} GB</p>}
+              {form.ram && (
+                <p className="text-slate-500 text-xs mt-1">{Math.round(form.ram / 1024 * 10) / 10} GB</p>
+              )}
             </div>
             <div>
               <label className="block text-sm font-medium text-slate-300 mb-1.5">vCPUs</label>
@@ -93,17 +90,6 @@ export default function EditVM() {
             </div>
           </div>
 
-          <div>
-            <label className="block text-sm font-medium text-slate-300 mb-1.5">Project</label>
-            <input
-              type="text"
-              value={form.project}
-              onChange={e => set('project', e.target.value)}
-              placeholder="Leave blank to remove from project"
-              className="w-full bg-navy-800 border border-navy-400 text-slate-200 focus:border-sky-500 focus:outline-none rounded-md px-3 py-2"
-            />
-          </div>
-
           <div className="flex gap-3 pt-2">
             <button
               type="submit"
@@ -111,7 +97,7 @@ export default function EditVM() {
               className="flex items-center gap-2 bg-sky-500 hover:bg-sky-400 disabled:opacity-50 text-white font-semibold px-5 py-2.5 rounded-md transition-colors"
             >
               <Save size={16} />
-              {saving ? 'Saving...' : 'Save Changes'}
+              {saving ? 'Saving…' : 'Save Changes'}
             </button>
             <Link
               to={`/vms/${uuid}`}

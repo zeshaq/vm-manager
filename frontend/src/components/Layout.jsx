@@ -4,7 +4,6 @@ import {
   Server,
   PlusCircle,
   HardDrive,
-  FolderOpen,
   Activity,
   Terminal,
   LogOut,
@@ -29,7 +28,6 @@ const navItems = [
   { to: '/files',      label: 'File Manager', icon: Files },
   { to: '/images',     label: 'Images',       icon: Image },
   { to: '/kubernetes', label: 'Kubernetes',   icon: Layers },
-  { to: '/projects',   label: 'Projects',     icon: FolderOpen },
 ]
 
 function NavItem({ to, label, icon: Icon, exact }) {
@@ -70,7 +68,6 @@ export default function Layout({ children, username, onLogout }) {
     if (p === '/files')      return 'File Manager'
     if (p === '/images')     return 'Images'
     if (p === '/kubernetes') return 'Kubernetes'
-    if (p === '/projects')   return 'Projects'
     return 'Hypercloud'
   }
 
