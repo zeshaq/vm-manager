@@ -131,7 +131,7 @@ const RANGES = [
 
 // ── System metrics tab ────────────────────────────────────────────────────────
 
-function SystemTab({ minutes, notify }) {
+function SystemTab({ minutes, refreshMs, notify }) {
   const [data, setData]       = useState(null)
   const [loading, setLoading] = useState(true)
   const timerRef = useRef(null)
@@ -150,9 +150,9 @@ function SystemTab({ minutes, notify }) {
 
   useEffect(() => {
     load(true)
-    timerRef.current = setInterval(() => load(false), 15000)
+    timerRef.current = setInterval(() => load(false), refreshMs)
     return () => clearInterval(timerRef.current)
-  }, [load])
+  }, [load, refreshMs])
 
   if (loading) return (
     <div className="flex items-center gap-2 text-slate-400 py-16 justify-center">
@@ -300,7 +300,7 @@ function SystemTab({ minutes, notify }) {
 
 // ── Docker metrics tab ────────────────────────────────────────────────────────
 
-function DockerTab({ minutes, notify }) {
+function DockerTab({ minutes, refreshMs, notify }) {
   const [data, setData]       = useState(null)
   const [loading, setLoading] = useState(true)
   const timerRef = useRef(null)
@@ -319,9 +319,9 @@ function DockerTab({ minutes, notify }) {
 
   useEffect(() => {
     load(true)
-    timerRef.current = setInterval(() => load(false), 15000)
+    timerRef.current = setInterval(() => load(false), refreshMs)
     return () => clearInterval(timerRef.current)
-  }, [load])
+  }, [load, refreshMs])
 
   if (loading) return (
     <div className="flex items-center gap-2 text-slate-400 py-16 justify-center">
@@ -437,10 +437,20 @@ const TABS = [
 ]
 
 export default function Metrics() {
-  const [tab, setTab]         = useState('system')
-  const [minutes, setMinutes] = useState(60)
-  const [toast, setToast]     = useState({ msg: '', type: 'ok' })
-  const [promOk, setPromOk]   = useState(true)
+  const [tab, setTab]           = useState('system')
+  const [minutes, setMinutes]   = useState(60)
+  const [refreshMs, setRefreshMs] = useState(3000)
+  const [toast, setToast]       = useState({ msg: '', type: 'ok' })
+  const [promOk, setPromOk]     = useState(true)
+
+  const REFRESH_OPTIONS = [
+    { label: '3s',  ms: 3000 },
+    { label: '5s',  ms: 5000 },
+    { label: '10s', ms: 10000 },
+    { label: '15s', ms: 15000 },
+    { label: '30s', ms: 30000 },
+    { label: '60s', ms: 60000 },
+  ]
 
   const notify = (msg, type = 'ok') => setToast({ msg, type })
 
@@ -497,14 +507,25 @@ export default function Metrics() {
         </div>
 
         <div className="flex-1" />
-        <span className="text-xs text-slate-500 flex items-center gap-1">
-          <RefreshCw size={11} /> Auto-refreshes every 15s
-        </span>
+
+        {/* Refresh interval */}
+        <div className="flex items-center gap-2">
+          <RefreshCw size={12} className="text-slate-500" />
+          <select
+            value={refreshMs}
+            onChange={e => setRefreshMs(Number(e.target.value))}
+            className="bg-navy-800 border border-navy-600 rounded px-2 py-1.5 text-xs text-slate-300 focus:outline-none focus:border-sky-500 cursor-pointer"
+          >
+            {REFRESH_OPTIONS.map(o => (
+              <option key={o.ms} value={o.ms}>{o.label}</option>
+            ))}
+          </select>
+        </div>
       </div>
 
-      {/* Tab content — key forces remount on range change */}
-      {tab === 'system' && <SystemTab key={`sys-${minutes}`} minutes={minutes} notify={notify} />}
-      {tab === 'docker' && <DockerTab key={`doc-${minutes}`} minutes={minutes} notify={notify} />}
+      {/* Tab content — key forces remount on range or refresh change */}
+      {tab === 'system' && <SystemTab key={`sys-${minutes}-${refreshMs}`} minutes={minutes} refreshMs={refreshMs} notify={notify} />}
+      {tab === 'docker' && <DockerTab key={`doc-${minutes}-${refreshMs}`} minutes={minutes} refreshMs={refreshMs} notify={notify} />}
 
       {/* Toast */}
       {toast.msg && (
