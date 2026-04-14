@@ -18,6 +18,10 @@ import Files from './pages/Files'
 import Kubernetes from './pages/Kubernetes'
 import Images from './pages/Images'
 import Console from './pages/Console'
+import SystemProcesses from './pages/SystemProcesses'
+import SystemServices from './pages/SystemServices'
+import Firewall from './pages/Firewall'
+import Security from './pages/Security'
 
 function PrivateRoute({ children, authState }) {
   if (authState === 'loading') {
@@ -80,6 +84,10 @@ export default function App() {
                 <Route path="/kubernetes" element={<Kubernetes />} />
                 <Route path="/images"     element={<Images />} />
                 <Route path="/dashboard" element={<Dashboard />} />
+                <Route path="/system/processes" element={<SystemProcesses />} />
+                <Route path="/system/services"  element={<SystemServices />} />
+                <Route path="/system/firewall"  element={<Firewall />} />
+                <Route path="/system/security"  element={<Security />} />
                 <Route path="*" element={<Navigate to="/" replace />} />
               </Routes>
             </Layout>
