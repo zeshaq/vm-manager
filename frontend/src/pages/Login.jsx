@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Server, Eye, EyeOff } from 'lucide-react'
+import { Eye, EyeOff } from 'lucide-react'
 import api from '../api'
 
 export default function Login({ onLogin }) {
@@ -38,11 +38,11 @@ export default function Login({ onLogin }) {
         <div className="bg-navy-700 border border-navy-400 rounded-xl shadow-2xl p-8">
           {/* Logo */}
           <div className="flex flex-col items-center mb-8">
-            <div className="w-14 h-14 bg-navy-500 border border-navy-300 rounded-xl flex items-center justify-center mb-4">
-              <Server size={28} className="text-sky-400" />
+            <div className="w-14 h-14 rounded-xl flex items-center justify-center mb-4 overflow-hidden">
+              <img src="/favicon.svg" alt="Hypercloud" className="w-14 h-14" />
             </div>
-            <h1 className="text-2xl font-bold text-sky-400">VM Manager</h1>
-            <p className="text-slate-400 text-sm mt-1">Sign in to manage your virtual machines</p>
+            <h1 className="text-2xl font-bold text-sky-400">Hypercloud</h1>
+            <p className="text-slate-400 text-sm mt-1">Sign in to your cloud dashboard</p>
           </div>
 
           {error && (

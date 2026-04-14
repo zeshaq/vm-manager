@@ -61,7 +61,7 @@ export default function Layout({ children, username, onLogout }) {
     if (p === '/metrics') return 'Metrics'
     if (p === '/network') return 'Network'
     if (p === '/projects') return 'Projects'
-    return 'VM Manager'
+    return 'Hypercloud'
   }
 
   return (
@@ -72,7 +72,7 @@ export default function Layout({ children, username, onLogout }) {
         <div className="px-6 py-5 border-b border-navy-400">
           <div className="flex items-center gap-2">
             <Server size={22} className="text-sky-400" />
-            <span className="text-sky-400 font-bold text-lg tracking-tight">VM Manager</span>
+            <span className="text-sky-400 font-bold text-lg tracking-tight">Hypercloud</span>
           </div>
         </div>
 
