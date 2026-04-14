@@ -214,7 +214,11 @@ export default function VMDetail() {
             </Link>
             <a href={`/terminal?vm_name=${vm.name}`} target="_blank" rel="noopener noreferrer"
               className="flex items-center gap-2 bg-navy-500 hover:bg-navy-400 border border-navy-300 text-slate-300 px-3 py-2 rounded-md text-sm">
-              <Terminal size={14} /> Console
+              <Terminal size={14} /> SSH
+            </a>
+            <a href={`/console/${uuid}`} target="_blank" rel="noopener noreferrer"
+              className="flex items-center gap-2 bg-sky-700 hover:bg-sky-600 border border-sky-500 text-white px-3 py-2 rounded-md text-sm">
+              <Monitor size={14} /> VNC
             </a>
             <button onClick={fetchVM}
               className="flex items-center gap-2 bg-navy-500 hover:bg-navy-400 border border-navy-300 text-slate-300 px-3 py-2 rounded-md text-sm">

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
-import { Play, Square, Trash2, Eye, PlusCircle, RefreshCw, Filter } from 'lucide-react'
+import { Play, Square, Trash2, Eye, PlusCircle, RefreshCw, Filter, Monitor } from 'lucide-react'
 import api from '../api'
 
 function StateBadge({ state }) {
@@ -205,6 +205,13 @@ export default function VMList() {
                       <Link to={`/vms/${vm.uuid}`} title="View" className="p-1.5 rounded bg-navy-500 hover:bg-navy-400 text-sky-400 transition-colors">
                         <Eye size={13} />
                       </Link>
+                      {vm.state_code === 1 && (
+                        <a href={`/console/${vm.uuid}`} target="_blank" rel="noopener noreferrer"
+                          title="VNC Console"
+                          className="p-1.5 rounded bg-sky-900/60 hover:bg-sky-800 text-sky-400 transition-colors">
+                          <Monitor size={13} />
+                        </a>
+                      )}
                       <button
                         onClick={() => handleDelete(vm.uuid)}
                         disabled={actionLoading[vm.uuid]}

@@ -5,14 +5,16 @@ export default defineConfig({
   plugins: [react()],
   server: {
     proxy: {
-      '/api': 'http://localhost:5000',
-      '/vnc': { target: 'ws://localhost:5000', ws: true },
+      '/api':   'http://localhost:5000',
+      '/ws':    { target: 'ws://localhost:5000', ws: true },
+      '/vnc':   { target: 'ws://localhost:5000', ws: true },
       '/host-ws': { target: 'ws://localhost:5000', ws: true },
       '/terminal': 'http://localhost:5000',
       '/host-terminal': 'http://localhost:5000',
     }
   },
   build: {
-    outDir: 'dist'
+    outDir: 'dist',
+    target: 'esnext',   // noVNC uses top-level await
   }
 })

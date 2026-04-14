@@ -18,6 +18,7 @@ import Metrics from './pages/Metrics'
 import Files from './pages/Files'
 import Kubernetes from './pages/Kubernetes'
 import Images from './pages/Images'
+import Console from './pages/Console'
 
 function PrivateRoute({ children, authState }) {
   if (authState === 'loading') {
@@ -51,6 +52,15 @@ export default function App() {
   return (
     <Routes>
       <Route path="/login" element={<Login onLogin={() => api.get('/auth/check').then(r => setAuthState(r.data))} />} />
+      {/* Console is full-screen — outside Layout */}
+      <Route
+        path="/console/:uuid"
+        element={
+          <PrivateRoute authState={authState}>
+            <Console />
+          </PrivateRoute>
+        }
+      />
       <Route
         path="/*"
         element={
