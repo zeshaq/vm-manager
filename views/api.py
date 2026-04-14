@@ -209,8 +209,15 @@ def create_vm():
     cpu = data.get('cpu')
     host_cpu = data.get('host_cpu', False)
     devices = data.get('devices', [])
-    disk_path = str(data.get('disk_path', '')).strip() or None
-    disk_size_gb = data.get('disk_size_gb', 20)
+
+    # Multi-disk support: `disks` is a list of {path, size_gb}.
+    # Legacy single-disk fields (disk_path / disk_size_gb) are still accepted.
+    raw_disks = data.get('disks')
+    if raw_disks is None:
+        # Legacy path
+        legacy_path = str(data.get('disk_path', '')).strip() or None
+        legacy_size = data.get('disk_size_gb', 20)
+        raw_disks = [{'path': legacy_path, 'size_gb': legacy_size}] if legacy_path else []
 
     if not name or not ram or not cpu:
         return jsonify({'error': 'Missing required fields: name, ram, cpu'}), 400
@@ -219,34 +226,43 @@ def create_vm():
     try:
         ram = int(ram)
         cpu = int(cpu)
-        disk_size_gb = int(disk_size_gb)
         if ram < 64 or ram > 1048576:
             return jsonify({'error': 'RAM must be between 64 MB and 1 TB'}), 400
         if cpu < 1 or cpu > 256:
             return jsonify({'error': 'CPU count must be between 1 and 256'}), 400
-        if disk_size_gb < 1 or disk_size_gb > 65536:
-            return jsonify({'error': 'Disk size must be between 1 and 65536 GB'}), 400
     except (ValueError, TypeError):
-        return jsonify({'error': 'ram, cpu, and disk_size_gb must be integers'}), 400
+        return jsonify({'error': 'ram and cpu must be integers'}), 400
 
-    # Resolve the OS disk path -------------------------------------------------
-    actual_disk_path = None
-    overlay_created = None  # track so we can clean up on failure
+    # Resolve / create disk images ─────────────────────────────────────────────
+    resolved_disks = []   # final paths passed to generate_vm_xml
+    overlays_created = [] # track for rollback on failure
+    safe_name = re.sub(r'[^a-zA-Z0-9._-]', '_', name)
 
-    if disk_path:
+    for idx, disk_entry in enumerate(raw_disks):
+        disk_path = str(disk_entry.get('path', '')).strip()
+        if not disk_path:
+            continue
+        disk_size_gb = int(disk_entry.get('size_gb', 20))
+        if disk_size_gb < 1 or disk_size_gb > 65536:
+            return jsonify({'error': f'Disk size must be between 1 and 65536 GB (disk {idx+1})'}), 400
+
         if not os.path.exists(disk_path):
             return jsonify({'error': f'Disk image not found: {disk_path}'}), 422
 
         if disk_path.lower().endswith('.iso'):
             # ISO → attach directly as cdrom (read-only, safe to share)
-            actual_disk_path = disk_path
+            resolved_disks.append(disk_path)
         else:
-            # Cloud / disk image → create a per-VM qcow2 overlay so the base
+            # Cloud / raw image → create a per-VM qcow2 overlay so the base
             # image is never modified and multiple VMs can share the same base.
-            safe_name = re.sub(r'[^a-zA-Z0-9._-]', '_', name)
-            overlay_path = os.path.join(STORAGE_PATH, f"{safe_name}-os.qcow2")
+            suffix = '' if idx == 0 else f'-disk{idx+1}'
+            overlay_path = os.path.join(STORAGE_PATH, f"{safe_name}{suffix}.qcow2")
             if os.path.exists(overlay_path):
-                return jsonify({'error': f'OS disk already exists: {os.path.basename(overlay_path)}'}), 409
+                # Roll back any overlays created so far
+                for p in overlays_created:
+                    try: os.remove(p)
+                    except OSError: pass
+                return jsonify({'error': f'Disk already exists: {os.path.basename(overlay_path)}'}), 409
             try:
                 cmd = [
                     'qemu-img', 'create',
@@ -256,16 +272,19 @@ def create_vm():
                     overlay_path,
                     f"{disk_size_gb}G",
                 ]
-                result = subprocess.run(cmd, check=True, capture_output=True, text=True)
+                subprocess.run(cmd, check=True, capture_output=True, text=True)
                 current_app.logger.info(f"Created overlay disk: {overlay_path} backing {disk_path}")
-                actual_disk_path = overlay_path
-                overlay_created = overlay_path
+                resolved_disks.append(overlay_path)
+                overlays_created.append(overlay_path)
             except subprocess.CalledProcessError as exc:
+                for p in overlays_created:
+                    try: os.remove(p)
+                    except OSError: pass
                 return jsonify({'error': f'Failed to create disk overlay: {exc.stderr.strip()}'}), 500
 
-    # Define the VM ------------------------------------------------------------
+    # Define the VM ────────────────────────────────────────────────────────────
     try:
-        xml_config = generate_vm_xml(name, ram, cpu, None, host_cpu, devices, actual_disk_path)
+        xml_config = generate_vm_xml(name, ram, cpu, None, host_cpu, devices, disks=resolved_disks)
         conn = libvirt.open('qemu:///system')
         if not conn:
             raise RuntimeError('Could not connect to hypervisor')
@@ -275,13 +294,14 @@ def create_vm():
         current_app.logger.info(f"VM created: {name} ({new_uuid}) by {session.get('username')}")
         return jsonify({'uuid': new_uuid}), 201
     except libvirt.libvirtError as e:
-        # Roll back overlay if we just created it
-        if overlay_created and os.path.exists(overlay_created):
-            os.remove(overlay_created)
+        for p in overlays_created:
+            try: os.remove(p)
+            except OSError: pass
         return jsonify({'error': str(e)}), 500
     except Exception:
-        if overlay_created and os.path.exists(overlay_created):
-            os.remove(overlay_created)
+        for p in overlays_created:
+            try: os.remove(p)
+            except OSError: pass
         current_app.logger.exception("Unexpected error creating VM")
         return jsonify({'error': 'Failed to create VM'}), 500
 

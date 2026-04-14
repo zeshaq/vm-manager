@@ -21,6 +21,7 @@ import base64
 import hashlib
 import json
 import os
+import subprocess
 import threading
 import time
 import uuid
@@ -81,33 +82,38 @@ def _job_set(job_id: str, **kw):
 
 # ── Assisted Installer API ────────────────────────────────────────────────────
 
-def _extract_offline_token(pull_secret: str) -> str:
-    """Decode cloud.openshift.com auth field → offline token."""
-    ps = json.loads(pull_secret)
-    b64 = ps['auths']['cloud.openshift.com']['auth']
-    decoded = base64.b64decode(b64 + '==').decode()
-    # format: "<user>:<token>"
-    return decoded.split(':', 1)[1]
+def _get_access_token(offline_token: str) -> str:
+    """Exchange a Red Hat offline token (from console.redhat.com/openshift/token)
+    for a short-lived access token via RH SSO.
 
-
-def _get_access_token(pull_secret: str) -> str:
-    """Exchange offline token for a short-lived access token via RH SSO."""
-    ps_hash = hashlib.sha256(pull_secret.encode()).hexdigest()[:16]
+    NOTE: This is NOT the same as the pull-secret registry credential.
+    The offline token must be obtained separately from:
+      https://console.redhat.com/openshift/token
+    """
+    tok_hash = hashlib.sha256(offline_token.encode()).hexdigest()[:16]
     now = time.time()
-    cached = _token_cache.get(ps_hash)
+    cached = _token_cache.get(tok_hash)
     if cached and cached['expires_at'] > now + 60:
         return cached['token']
 
-    offline_token = _extract_offline_token(pull_secret)
-    resp = _req.post(SSO_URL, data={
-        'grant_type':    'refresh_token',
-        'client_id':     'cloud-services',
-        'refresh_token': offline_token,
-    }, timeout=20)
-    resp.raise_for_status()
+    resp = _req.post(
+        SSO_URL,
+        data={
+            'grant_type':    'refresh_token',
+            'client_id':     'cloud-services',
+            'refresh_token': offline_token.strip(),
+        },
+        headers={'Content-Type': 'application/x-www-form-urlencoded'},
+        timeout=20,
+    )
+    if not resp.ok:
+        body = resp.text[:400]
+        raise RuntimeError(
+            f'SSO returned HTTP {resp.status_code}: {body}'
+        )
     data = resp.json()
     token = data['access_token']
-    _token_cache[ps_hash] = {'token': token, 'expires_at': now + data.get('expires_in', 900)}
+    _token_cache[tok_hash] = {'token': token, 'expires_at': now + data.get('expires_in', 900)}
     return token
 
 
@@ -196,66 +202,116 @@ def validate_pull_secret():
 
 # ── libvirt networks ─────────────────────────────────────────────────────────
 
+def _host_bridges():
+    """Return host-level Linux bridges not managed by libvirt."""
+    import socket, struct, json as _json
+    bridges = []
+    try:
+        # Use 'ip -j addr' to get all interfaces with addresses
+        result = subprocess.run(['ip', '-j', 'addr'], capture_output=True, text=True, timeout=5)
+        ifaces = _json.loads(result.stdout) if result.returncode == 0 else []
+    except Exception:
+        ifaces = []
+
+    for iface in ifaces:
+        ifname = iface.get('ifname', '')
+        # Only include actual bridge devices (check /sys/class/net/<name>/bridge)
+        if not os.path.isdir(f'/sys/class/net/{ifname}/bridge'):
+            continue
+        cidr = ''
+        for addr_info in iface.get('addr_info', []):
+            if addr_info.get('family') == 'inet':
+                local  = addr_info.get('local', '')
+                prefix = addr_info.get('prefixlen', '')
+                if local and prefix != '':
+                    import ipaddress
+                    net = ipaddress.ip_interface(f'{local}/{prefix}').network
+                    cidr = str(net)
+                    break
+        bridges.append({
+            'name':    ifname,
+            'bridge':  ifname,
+            'cidr':    cidr,
+            'active':  iface.get('operstate', '').upper() != 'DOWN',
+            'forward': 'bridge',
+            'host_bridge': True,
+        })
+    return bridges
+
+
 @ocp_bp.route('/api/openshift/networks')
 def list_networks():
     err = _auth()
     if err:
         return err
-    if not _LIBVIRT:
-        return jsonify({'networks': []})
-    try:
-        conn = libvirt.open('qemu:///system')
-        nets = []
-        for net in conn.listAllNetworks(0):
-            try:
-                xml_str = net.XMLDesc(0)
-                root    = ET.fromstring(xml_str)
-                name    = net.name()
-                active  = net.isActive() == 1
 
-                # Pull bridge device name
-                bridge_el = root.find('bridge')
-                bridge    = bridge_el.get('name', '') if bridge_el is not None else ''
+    nets = []
 
-                # Pull IP / CIDR from <ip address= prefix= or netmask=>
-                cidr = ''
-                ip_el = root.find('ip')
-                if ip_el is not None:
-                    addr = ip_el.get('address', '')
-                    prefix = ip_el.get('prefix', '')
-                    netmask = ip_el.get('netmask', '')
-                    if addr:
-                        if prefix:
-                            cidr = f'{addr}/{prefix}'
-                        elif netmask:
-                            # Convert netmask to prefix length
-                            import socket, struct
-                            packed = socket.inet_aton(netmask)
-                            bits   = bin(struct.unpack('!I', packed)[0]).count('1')
-                            # Use network address: zero out host bits
-                            ip_int = struct.unpack('!I', socket.inet_aton(addr))[0]
-                            mask_int = struct.unpack('!I', packed)[0]
-                            net_int = ip_int & mask_int
-                            net_addr = socket.inet_ntoa(struct.pack('!I', net_int))
-                            cidr = f'{net_addr}/{bits}'
+    # ── libvirt-managed networks ───────────────────────────────────────────────
+    if _LIBVIRT:
+        try:
+            conn = libvirt.open('qemu:///system')
+            libvirt_bridges = set()  # track bridge device names to avoid duplicates
+            for net in conn.listAllNetworks(0):
+                try:
+                    xml_str = net.XMLDesc(0)
+                    root    = ET.fromstring(xml_str)
+                    name    = net.name()
+                    active  = net.isActive() == 1
 
-                # forward mode (nat / bridge / none)
-                fwd_el  = root.find('forward')
-                fwd_mode = fwd_el.get('mode', 'isolated') if fwd_el is not None else 'isolated'
+                    # Pull bridge device name
+                    bridge_el = root.find('bridge')
+                    bridge    = bridge_el.get('name', '') if bridge_el is not None else ''
+                    if bridge:
+                        libvirt_bridges.add(bridge)
 
-                nets.append({
-                    'name':    name,
-                    'bridge':  bridge,
-                    'cidr':    cidr,
-                    'active':  active,
-                    'forward': fwd_mode,
-                })
-            except Exception:
-                pass
-        conn.close()
-        return jsonify({'networks': nets})
-    except Exception as e:
-        return jsonify({'networks': [], 'error': str(e)})
+                    # Pull IP / CIDR from <ip address= prefix= or netmask=>
+                    cidr = ''
+                    ip_el = root.find('ip')
+                    if ip_el is not None:
+                        addr = ip_el.get('address', '')
+                        prefix = ip_el.get('prefix', '')
+                        netmask = ip_el.get('netmask', '')
+                        if addr:
+                            if prefix:
+                                cidr = f'{addr}/{prefix}'
+                            elif netmask:
+                                import socket, struct
+                                packed   = socket.inet_aton(netmask)
+                                bits     = bin(struct.unpack('!I', packed)[0]).count('1')
+                                ip_int   = struct.unpack('!I', socket.inet_aton(addr))[0]
+                                mask_int = struct.unpack('!I', packed)[0]
+                                net_int  = ip_int & mask_int
+                                net_addr = socket.inet_ntoa(struct.pack('!I', net_int))
+                                cidr = f'{net_addr}/{bits}'
+
+                    # forward mode (nat / bridge / none)
+                    fwd_el   = root.find('forward')
+                    fwd_mode = fwd_el.get('mode', 'isolated') if fwd_el is not None else 'isolated'
+
+                    nets.append({
+                        'name':    name,
+                        'bridge':  bridge,
+                        'cidr':    cidr,
+                        'active':  active,
+                        'forward': fwd_mode,
+                    })
+                except Exception:
+                    pass
+            conn.close()
+
+            # ── host bridges (br-real, br0, etc.) not managed by libvirt ──────
+            for hb in _host_bridges():
+                if hb['bridge'] not in libvirt_bridges:
+                    nets.append(hb)
+
+        except Exception as e:
+            return jsonify({'networks': nets, 'error': str(e)})
+    else:
+        # libvirt unavailable — still expose host bridges
+        nets = _host_bridges()
+
+    return jsonify({'networks': nets})
 
 
 # ── Preflight checks ──────────────────────────────────────────────────────────
@@ -313,14 +369,15 @@ def deploy():
         return err
 
     cfg = request.get_json(silent=True) or {}
-    required = ['cluster_name', 'base_domain', 'pull_secret',
+    required = ['cluster_name', 'base_domain', 'pull_secret', 'offline_token',
                 'ocp_version', 'deployment_type', 'machine_cidr']
     missing = [f for f in required if not cfg.get(f)]
     if missing:
         return jsonify({'error': f'Missing fields: {", ".join(missing)}'}), 400
 
     job_id = uuid.uuid4().hex[:8]
-    safe_cfg = {k: v for k, v in cfg.items() if k != 'pull_secret'}
+    # Omit secrets from the stored config summary shown in the UI
+    safe_cfg = {k: v for k, v in cfg.items() if k not in ('pull_secret', 'offline_token')}
     with _lock:
         _jobs[job_id] = {
             'id':       job_id,
@@ -446,7 +503,7 @@ def _run_deploy(job_id: str, cfg: dict):
         # ── Step 1: Auth ──────────────────────────────────────────────────────
         phase('Authenticating with Red Hat', 5)
         try:
-            token = _get_access_token(cfg['pull_secret'])
+            token = _get_access_token(cfg['offline_token'])
             log('Access token obtained ✓')
         except Exception as e:
             fail(f'Authentication failed: {e}')
@@ -597,7 +654,7 @@ def _run_deploy(job_id: str, cfg: dict):
         while time.time() < deadline:
             try:
                 # Refresh token if needed
-                token = _get_access_token(cfg['pull_secret'])
+                token = _get_access_token(cfg['offline_token'])
                 r = _ai('GET', f'/clusters/{cluster_id}/hosts', token)
                 hosts = r.json()
                 registered = [h for h in hosts if h.get('status') not in ('', None, 'disconnected')]
@@ -624,7 +681,7 @@ def _run_deploy(job_id: str, cfg: dict):
         # Set host roles for multi-node
         if not is_sno:
             phase('Assigning node roles', 55)
-            token = _get_access_token(cfg['pull_secret'])
+            token = _get_access_token(cfg['offline_token'])
             r = _ai('GET', f'/clusters/{cluster_id}/hosts', token)
             hosts = r.json()
             for idx, host in enumerate(hosts[:len(vm_names)]):
@@ -639,7 +696,7 @@ def _run_deploy(job_id: str, cfg: dict):
         # ── Step 7: Start installation ────────────────────────────────────────
         phase('Starting OpenShift installation', 60)
         try:
-            token = _get_access_token(cfg['pull_secret'])
+            token = _get_access_token(cfg['offline_token'])
             _ai('POST', f'/clusters/{cluster_id}/actions/install', token)
             log('Installation triggered ✓')
         except Exception as e:
@@ -663,7 +720,7 @@ def _run_deploy(job_id: str, cfg: dict):
 
         while time.time() < deadline:
             try:
-                token = _get_access_token(cfg['pull_secret'])
+                token = _get_access_token(cfg['offline_token'])
                 r = _ai('GET', f'/clusters/{cluster_id}', token)
                 cluster_data = r.json()
                 status     = cluster_data.get('status', '')
@@ -695,7 +752,7 @@ def _run_deploy(job_id: str, cfg: dict):
         phase('Collecting credentials', 98)
         result = {}
         try:
-            token = _get_access_token(cfg['pull_secret'])
+            token = _get_access_token(cfg['offline_token'])
             r = _ai('GET', f'/clusters/{cluster_id}/credentials', token)
             creds = r.json()
             kubeconfig_raw = creds.get('kubeconfig', '')

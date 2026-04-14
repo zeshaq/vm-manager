@@ -1,7 +1,9 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { PlusCircle, Cpu } from 'lucide-react'
+import { PlusCircle, Cpu, HardDrive, Trash2, Plus } from 'lucide-react'
 import api from '../api'
+
+const EMPTY_DISK = { path: '', size_gb: '20' }
 
 export default function CreateVM() {
   const navigate = useNavigate()
@@ -12,22 +14,43 @@ export default function CreateVM() {
     host_cpu: false,
     devices: [],
   })
+  const [disks, setDisks] = useState([{ ...EMPTY_DISK }])
   const [loading, setLoading] = useState(false)
-  const [error, setError] = useState('')
+  const [error, setError]   = useState('')
 
   const set = (k, v) => setForm(p => ({ ...p, [k]: v }))
 
+  // ── disk helpers ────────────────────────────────────────────────────────────
+  const setDisk = (idx, field, value) =>
+    setDisks(prev => prev.map((d, i) => i === idx ? { ...d, [field]: value } : d))
+
+  const addDisk = () => setDisks(prev => [...prev, { ...EMPTY_DISK }])
+
+  const removeDisk = idx =>
+    setDisks(prev => prev.filter((_, i) => i !== idx))
+
+  const isIso = path => path.trim().toLowerCase().endsWith('.iso')
+
+  // ── submit ──────────────────────────────────────────────────────────────────
   const handleSubmit = async e => {
     e.preventDefault()
     setError('')
     setLoading(true)
     try {
+      const diskPayload = disks
+        .filter(d => d.path.trim())
+        .map(d => ({
+          path:    d.path.trim(),
+          size_gb: parseInt(d.size_gb) || 20,
+        }))
+
       const res = await api.post('/vms', {
-        name: form.name,
-        ram: parseInt(form.ram),
-        cpu: parseInt(form.cpu),
+        name:     form.name,
+        ram:      parseInt(form.ram),
+        cpu:      parseInt(form.cpu),
         host_cpu: form.host_cpu,
-        devices: form.devices,
+        devices:  form.devices,
+        disks:    diskPayload,
       })
       navigate(`/vms/${res.data.uuid}`)
     } catch (err) {
@@ -116,6 +139,85 @@ export default function CreateVM() {
               Enable Host CPU Passthrough
               <span className="text-slate-500 text-xs">(host-passthrough mode)</span>
             </label>
+          </div>
+
+          {/* ── Disks ───────────────────────────────────────────────────────── */}
+          <div>
+            <div className="flex items-center justify-between mb-2">
+              <label className="text-sm font-medium text-slate-300 flex items-center gap-2">
+                <HardDrive size={14} className="text-sky-400" />
+                Disks
+                <span className="text-slate-500 font-normal">(optional)</span>
+              </label>
+              <button
+                type="button"
+                onClick={addDisk}
+                className="flex items-center gap-1 text-xs text-sky-400 hover:text-sky-300 transition-colors"
+              >
+                <Plus size={13} /> Add Disk
+              </button>
+            </div>
+
+            <div className="space-y-2">
+              {disks.map((disk, idx) => {
+                const iso = isIso(disk.path)
+                return (
+                  <div key={idx} className="flex gap-2 items-start">
+                    {/* Path */}
+                    <div className="flex-1">
+                      <input
+                        type="text"
+                        value={disk.path}
+                        onChange={e => setDisk(idx, 'path', e.target.value)}
+                        placeholder={idx === 0
+                          ? '/var/lib/libvirt/images/base.qcow2 or ubuntu.iso'
+                          : '/var/lib/libvirt/images/data.qcow2'}
+                        className="w-full bg-navy-800 border border-navy-400 text-slate-200 focus:border-sky-500 focus:outline-none rounded-md px-3 py-2 text-sm font-mono"
+                      />
+                      {iso && (
+                        <p className="text-amber-400 text-xs mt-0.5">
+                          ISO detected — attached as read-only CD-ROM
+                        </p>
+                      )}
+                    </div>
+
+                    {/* Size — hidden for ISOs */}
+                    {!iso && (
+                      <div className="w-28">
+                        <div className="flex items-center">
+                          <input
+                            type="number"
+                            value={disk.size_gb}
+                            onChange={e => setDisk(idx, 'size_gb', e.target.value)}
+                            min="1"
+                            max="65536"
+                            className="w-full bg-navy-800 border border-navy-400 text-slate-200 focus:border-sky-500 focus:outline-none rounded-md px-3 py-2 text-sm"
+                          />
+                          <span className="ml-1.5 text-slate-500 text-xs whitespace-nowrap">GB</span>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Remove button (only if more than one disk) */}
+                    {disks.length > 1 && (
+                      <button
+                        type="button"
+                        onClick={() => removeDisk(idx)}
+                        className="mt-2 text-slate-500 hover:text-red-400 transition-colors"
+                        title="Remove disk"
+                      >
+                        <Trash2 size={15} />
+                      </button>
+                    )}
+                  </div>
+                )
+              })}
+            </div>
+
+            <p className="text-slate-500 text-xs mt-1.5">
+              qcow2/img base images create a per-VM overlay. ISOs attach as CD-ROM.
+              Multiple disks attach as <code className="text-slate-400">vda</code>, <code className="text-slate-400">vdb</code>, …
+            </p>
           </div>
 
           {/* PCI Devices */}

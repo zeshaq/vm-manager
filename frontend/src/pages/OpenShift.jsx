@@ -118,7 +118,7 @@ function StepPreflight({ onNext }) {
   )
 }
 
-// ── Step 1: Pull Secret ───────────────────────────────────────────────────────
+// ── Step 1: Pull Secret + Offline Token ──────────────────────────────────────
 
 function StepPullSecret({ form, set, onNext, onBack }) {
   const [validating, setV]   = useState(false)
@@ -138,48 +138,84 @@ function StepPullSecret({ form, set, onNext, onBack }) {
   }
 
   return (
-    <div className="space-y-5">
+    <div className="space-y-6">
       <div>
-        <h2 className="text-slate-100 font-bold text-lg mb-1">Pull Secret</h2>
+        <h2 className="text-slate-100 font-bold text-lg mb-1">Red Hat Credentials</h2>
         <p className="text-slate-400 text-sm">
-          Get your pull secret from{' '}
-          <a href="https://console.redhat.com/openshift/install/pull-secret" target="_blank" rel="noopener noreferrer"
-            className="text-sky-400 hover:underline inline-flex items-center gap-1">
-            console.redhat.com <ExternalLink size={11} />
-          </a>
+          Both a pull secret and an API offline token are required to deploy via
+          the Assisted Installer API.
         </p>
       </div>
 
-      <Field label="Pull Secret JSON" required>
+      {/* Pull Secret */}
+      <div className="space-y-2">
+        <div className="flex items-center justify-between">
+          <label className="text-sm font-medium text-slate-300">
+            Pull Secret <span className="text-red-400">*</span>
+          </label>
+          <a href="https://console.redhat.com/openshift/install/pull-secret"
+            target="_blank" rel="noopener noreferrer"
+            className="text-xs text-sky-400 hover:underline inline-flex items-center gap-1">
+            Get pull secret <ExternalLink size={11} />
+          </a>
+        </div>
         <textarea
           value={form.pull_secret}
           onChange={e => { set('pull_secret', e.target.value); setResult(null) }}
-          rows={6}
+          rows={5}
           placeholder='{"auths":{"cloud.openshift.com":{"auth":"..."},...}}'
           className={inputCls + ' font-mono text-xs resize-none'}
         />
-      </Field>
+        <div className="flex items-center gap-3">
+          <button onClick={validate} disabled={!form.pull_secret || validating}
+            className="flex items-center gap-2 bg-navy-600 hover:bg-navy-500 border border-navy-400 text-slate-200 px-3 py-1.5 rounded-md text-xs transition-colors disabled:opacity-40">
+            {validating ? <Loader2 size={12} className="animate-spin" /> : <Shield size={12} />}
+            Validate structure
+          </button>
+          {result && (
+            <div className={`flex items-center gap-1.5 text-xs ${result.valid ? 'text-green-400' : 'text-red-400'}`}>
+              {result.valid ? <CheckCircle size={13} /> : <XCircle size={13} />}
+              {result.valid
+                ? `OK — ${result.registries?.length} registries`
+                : result.error || `Missing: ${result.missing?.join(', ')}`
+              }
+            </div>
+          )}
+        </div>
+      </div>
 
-      <div className="flex items-center gap-3">
-        <button onClick={validate} disabled={!form.pull_secret || validating}
-          className="flex items-center gap-2 bg-navy-600 hover:bg-navy-500 border border-navy-400 text-slate-200 px-4 py-2 rounded-md text-sm transition-colors disabled:opacity-40">
-          {validating ? <Loader2 size={14} className="animate-spin" /> : <Shield size={14} />}
-          Validate
-        </button>
-
-        {result && (
-          <div className={`flex items-center gap-2 text-sm ${result.valid ? 'text-green-400' : 'text-red-400'}`}>
-            {result.valid ? <CheckCircle size={15} /> : <XCircle size={15} />}
-            {result.valid
-              ? `Valid — ${result.registries?.length} registries`
-              : result.error || `Missing: ${result.missing?.join(', ')}`
-            }
-          </div>
-        )}
+      {/* Offline token — separate from pull secret */}
+      <div className="space-y-2">
+        <div className="flex items-center justify-between">
+          <label className="text-sm font-medium text-slate-300">
+            API Offline Token <span className="text-red-400">*</span>
+          </label>
+          <a href="https://console.redhat.com/openshift/token"
+            target="_blank" rel="noopener noreferrer"
+            className="text-xs text-sky-400 hover:underline inline-flex items-center gap-1">
+            Get offline token <ExternalLink size={11} />
+          </a>
+        </div>
+        <textarea
+          value={form.offline_token}
+          onChange={e => set('offline_token', e.target.value)}
+          rows={3}
+          placeholder="Paste your offline token from console.redhat.com/openshift/token …"
+          className={inputCls + ' font-mono text-xs resize-none'}
+        />
+        <p className="text-slate-500 text-xs">
+          This is a long JWT used to authenticate with the Assisted Installer API.
+          It is <strong className="text-slate-400">different</strong> from the pull secret —
+          get it from{' '}
+          <a href="https://console.redhat.com/openshift/token" target="_blank" rel="noopener noreferrer"
+            className="text-sky-500 hover:underline">
+            console.redhat.com/openshift/token
+          </a>.
+        </p>
       </div>
 
       <NavButtons onBack={onBack} onNext={onNext}
-        nextDisabled={!form.pull_secret || (result && !result.valid)} />
+        nextDisabled={!form.pull_secret || !form.offline_token || (result && !result.valid)} />
     </div>
   )
 }
@@ -428,14 +464,20 @@ function StepNetwork({ form, set, onNext, onBack }) {
                     : 'border-navy-500 bg-navy-700 hover:border-navy-400'
                 }`}>
                 <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2 mb-0.5">
+                  <div className="flex items-center gap-2 mb-0.5 flex-wrap">
                     <span className="text-slate-100 font-semibold text-sm">{net.name}</span>
-                    {net.bridge && (
+                    {net.bridge && net.bridge !== net.name && (
                       <span className="text-slate-500 text-xs font-mono">({net.bridge})</span>
                     )}
-                    <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${FWD_BADGE[net.forward] || FWD_BADGE.isolated}`}>
-                      {net.forward}
-                    </span>
+                    {net.host_bridge ? (
+                      <span className="text-xs px-2 py-0.5 rounded-full font-medium bg-orange-500/20 text-orange-300">
+                        host bridge
+                      </span>
+                    ) : (
+                      <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${FWD_BADGE[net.forward] || FWD_BADGE.isolated}`}>
+                        {net.forward}
+                      </span>
+                    )}
                     {!net.active && (
                       <span className="text-xs px-2 py-0.5 rounded-full bg-red-500/15 text-red-400">inactive</span>
                     )}
@@ -830,6 +872,7 @@ function PastDeployments({ onResume }) {
 
 const DEFAULTS = {
   pull_secret:          '',
+  offline_token:        '',
   deployment_type:      'sno',
   cluster_name:         '',
   base_domain:          '',

@@ -8,12 +8,15 @@ from .listing import get_host_devices, parse_pci_id
 creation_bp = Blueprint('creation', __name__)
 
 
-def generate_vm_xml(name, memory_mb, vcpus, project=None, host_cpu=False, devices=None, disk_path=None):
+def generate_vm_xml(name, memory_mb, vcpus, project=None, host_cpu=False, devices=None, disk_path=None, disks=None):
     """Generate libvirt domain XML for a new VM.
 
-    disk_path: optional path to an OS image that will be attached at definition time.
-      - .iso  → attached as a SATA cdrom (read-only)
-      - anything else → attached as a virtio disk (qcow2 overlay expected)
+    disks: list of resolved disk paths (strings).
+      - .iso  → attached as a SATA cdrom (read-only); targets sda, sdb, ...
+      - anything else → attached as a virtio disk; targets vda, vdb, ...
+
+    disk_path: legacy single-disk shorthand (converted to a 1-element disks list).
+    Both can be provided; disk_path is prepended.
     """
     memory_kib = int(memory_mb) * 1024
 
@@ -41,24 +44,38 @@ def generate_vm_xml(name, memory_mb, vcpus, project=None, host_cpu=False, device
             </hostdev>
             """
 
-    disk_xml = ""
+    # Build the combined disk list
+    all_disks = []
     if disk_path:
-        if disk_path.lower().endswith('.iso'):
-            disk_xml = f"""
-        <!-- OS ISO (cdrom) -->
+        all_disks.append(disk_path)
+    if disks:
+        all_disks.extend(disks)
+
+    # Generate XML for each disk with sequential target device names
+    disk_xml = ""
+    virtio_idx = 0  # vda, vdb, vdc ...
+    sata_idx   = 0  # sda, sdb, sdc ...
+    for path in all_disks:
+        if path.lower().endswith('.iso'):
+            target = 'sd' + chr(ord('a') + sata_idx)
+            sata_idx += 1
+            disk_xml += f"""
+        <!-- ISO (cdrom) -->
         <disk type='file' device='cdrom'>
           <driver name='qemu' type='raw'/>
-          <source file='{disk_path}'/>
-          <target dev='sda' bus='sata'/>
+          <source file='{path}'/>
+          <target dev='{target}' bus='sata'/>
           <readonly/>
         </disk>"""
         else:
-            disk_xml = f"""
-        <!-- OS Disk -->
+            target = 'vd' + chr(ord('a') + virtio_idx)
+            virtio_idx += 1
+            disk_xml += f"""
+        <!-- Disk {target} -->
         <disk type='file' device='disk'>
           <driver name='qemu' type='qcow2' cache='none'/>
-          <source file='{disk_path}'/>
-          <target dev='vda' bus='virtio'/>
+          <source file='{path}'/>
+          <target dev='{target}' bus='virtio'/>
         </disk>"""
 
     # Boot order: prefer hard disk → cdrom → network
