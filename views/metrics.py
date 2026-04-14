@@ -4,14 +4,26 @@ Prometheus proxy — all queries go through here so:
   - Auth is enforced by Flask session
 """
 import time
+import xml.etree.ElementTree as ET
 import urllib.request
 import urllib.parse
 import json as _json
 from flask import Blueprint, jsonify, request, session
 
+try:
+    import libvirt
+    _LIBVIRT = True
+except ImportError:
+    _LIBVIRT = False
+
 metrics_bp = Blueprint('metrics', __name__)
 
 PROMETHEUS = 'http://localhost:9090'
+
+# ── Per-VM sample store for delta-based CPU / disk / net rates ────────────────
+# { uuid: { 'cpu_ns': int, 'wall_ns': int, 'disk_r': int, 'disk_w': int,
+#           'net_rx': int, 'net_tx': int, 'ts': float } }
+_vm_samples: dict = {}
 
 
 def _auth():
@@ -210,3 +222,162 @@ def query():
     if not q:
         return jsonify({'error': 'q param required'}), 400
     return jsonify(_prom('/api/v1/query', {'query': q}))
+
+
+# ── Per-VM stats ──────────────────────────────────────────────────────────────
+
+def _parse_vm_stats(dom):
+    """
+    Return a dict of instantaneous + rate stats for a single running domain.
+    CPU% is computed as a delta against the previous call stored in _vm_samples.
+    Disk and network rates are similarly delta-based.
+    Returns None if the domain is not running.
+    """
+    global _vm_samples
+
+    try:
+        state, _ = dom.state(0)
+    except Exception:
+        return None
+    if state != 1:  # VIR_DOMAIN_RUNNING
+        return None
+
+    uuid = dom.UUIDString()
+    name = dom.name()
+    now = time.time()
+
+    # ── Memory ────────────────────────────────────────────────────────────────
+    mem_used = mem_total = None
+    try:
+        info = dom.info()          # [state, maxMem, memory, nrVirtCpu, cpuTime]
+        mem_total = info[1] * 1024  # KiB → bytes (maxMem)
+        mem_used  = info[2] * 1024  # KiB → bytes (current balloon)
+    except Exception:
+        pass
+
+    # ── CPU time ─────────────────────────────────────────────────────────────
+    cpu_ns = None
+    try:
+        cpu_ns = dom.info()[4]     # nanoseconds of CPU time consumed
+    except Exception:
+        pass
+
+    # ── Disk I/O ─────────────────────────────────────────────────────────────
+    disk_r_bytes = disk_w_bytes = 0
+    try:
+        xml = dom.XMLDesc(0)
+        root = ET.fromstring(xml)
+        for disk in root.findall('.//devices/disk[@device="disk"]'):
+            tgt = disk.find('target')
+            if tgt is None:
+                continue
+            dev = tgt.get('dev', '')
+            try:
+                stats = dom.blockStats(dev)
+                # (rd_req, rd_bytes, wr_req, wr_bytes, errs)
+                disk_r_bytes += stats[1]
+                disk_w_bytes += stats[3]
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+    # ── Network I/O ──────────────────────────────────────────────────────────
+    net_rx_bytes = net_tx_bytes = 0
+    try:
+        xml = xml if 'xml' in dir() else dom.XMLDesc(0)
+        root = root if 'root' in dir() else ET.fromstring(xml)
+        for iface in root.findall('.//devices/interface[@type]'):
+            tgt = iface.find('target')
+            if tgt is None:
+                continue
+            dev = tgt.get('dev', '')
+            if not dev:
+                continue
+            try:
+                stats = dom.interfaceStats(dev)
+                # (rx_bytes, rx_packets, rx_errs, rx_drop,
+                #  tx_bytes, tx_packets, tx_errs, tx_drop)
+                net_rx_bytes += stats[0]
+                net_tx_bytes += stats[4]
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+    # ── Compute rates against previous sample ────────────────────────────────
+    prev = _vm_samples.get(uuid)
+    cpu_pct = disk_r_rate = disk_w_rate = net_rx_rate = net_tx_rate = None
+
+    if prev and cpu_ns is not None:
+        dt = now - prev['ts']
+        if dt > 0:
+            # CPU%: fraction of one vCPU used; multiply by 100 to get %
+            delta_cpu = cpu_ns - prev.get('cpu_ns', cpu_ns)
+            # dt is wall seconds, cpu_ns is nanoseconds → convert
+            try:
+                ncpus = dom.info()[3]  # nrVirtCpu
+            except Exception:
+                ncpus = 1
+            cpu_pct = max(0.0, min(100.0 * ncpus,
+                          (delta_cpu / 1e9) / dt * 100))
+
+            delta_dr = disk_r_bytes - prev.get('disk_r', disk_r_bytes)
+            delta_dw = disk_w_bytes - prev.get('disk_w', disk_w_bytes)
+            delta_nr = net_rx_bytes  - prev.get('net_rx', net_rx_bytes)
+            delta_nt = net_tx_bytes  - prev.get('net_tx', net_tx_bytes)
+
+            disk_r_rate = max(0, delta_dr / dt)
+            disk_w_rate = max(0, delta_dw / dt)
+            net_rx_rate = max(0, delta_nr / dt)
+            net_tx_rate = max(0, delta_nt / dt)
+
+    # Store new sample
+    _vm_samples[uuid] = {
+        'ts':     now,
+        'cpu_ns': cpu_ns or 0,
+        'disk_r': disk_r_bytes,
+        'disk_w': disk_w_bytes,
+        'net_rx': net_rx_bytes,
+        'net_tx': net_tx_bytes,
+    }
+
+    return {
+        'uuid':         uuid,
+        'name':         name,
+        'cpu_pct':      round(cpu_pct, 2)      if cpu_pct      is not None else None,
+        'mem_used':     mem_used,
+        'mem_total':    mem_total,
+        'mem_pct':      round(mem_used / mem_total * 100, 1)
+                        if mem_used and mem_total else None,
+        'disk_r_rate':  round(disk_r_rate, 1)  if disk_r_rate  is not None else None,
+        'disk_w_rate':  round(disk_w_rate, 1)  if disk_w_rate  is not None else None,
+        'net_rx_rate':  round(net_rx_rate, 1)  if net_rx_rate  is not None else None,
+        'net_tx_rate':  round(net_tx_rate, 1)  if net_tx_rate  is not None else None,
+    }
+
+
+@metrics_bp.route('/api/metrics/vms')
+def vms_stats():
+    err = _auth()
+    if err:
+        return err
+
+    if not _LIBVIRT:
+        return jsonify({'error': 'libvirt not available'}), 503
+
+    try:
+        conn = libvirt.open('qemu:///system')
+    except Exception as e:
+        return jsonify({'error': f'Cannot connect to libvirt: {e}'}), 503
+
+    result = []
+    try:
+        for dom in conn.listAllDomains(0):
+            stats = _parse_vm_stats(dom)
+            if stats:
+                result.append(stats)
+    finally:
+        conn.close()
+
+    return jsonify({'vms': result, 'ts': time.time()})

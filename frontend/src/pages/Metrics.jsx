@@ -6,7 +6,7 @@ import {
 import api from '../api'
 import {
   Cpu, MemoryStick, HardDrive, Network, RefreshCw,
-  Activity, Container, AlertCircle, Loader2, TrendingUp
+  Activity, Container, AlertCircle, Loader2, TrendingUp, Server
 } from 'lucide-react'
 
 // ── helpers ───────────────────────────────────────────────────────────────────
@@ -429,11 +429,257 @@ function DockerTab({ minutes, refreshMs, notify }) {
   )
 }
 
+// ── VM metrics tab ────────────────────────────────────────────────────────────
+
+function VMsTab({ refreshMs, notify }) {
+  const [data, setData]       = useState(null)
+  const [loading, setLoading] = useState(true)
+  const [history, setHistory] = useState({})   // { uuid: [{t, cpu, net_rx, net_tx, disk_r, disk_w}] }
+  const timerRef = useRef(null)
+  const MAX_HIST = 120  // keep last 120 points per VM
+
+  const load = useCallback(async (showSpinner = false) => {
+    if (showSpinner) setLoading(true)
+    try {
+      const r = await api.get('/metrics/vms')
+      const vms = r.data.vms
+      setData(vms)
+
+      // Append new data points to per-VM history
+      setHistory(prev => {
+        const next = { ...prev }
+        const ts = Math.floor(r.data.ts)
+        vms.forEach(vm => {
+          const pts = next[vm.uuid] ? [...next[vm.uuid]] : []
+          pts.push({
+            t:       ts,
+            cpu:     vm.cpu_pct,
+            net_rx:  vm.net_rx_rate,
+            net_tx:  vm.net_tx_rate,
+            disk_r:  vm.disk_r_rate,
+            disk_w:  vm.disk_w_rate,
+          })
+          if (pts.length > MAX_HIST) pts.splice(0, pts.length - MAX_HIST)
+          next[vm.uuid] = pts
+        })
+        // Purge stale VMs not in this response
+        const uuids = new Set(vms.map(v => v.uuid))
+        Object.keys(next).forEach(k => { if (!uuids.has(k)) delete next[k] })
+        return next
+      })
+    } catch (e) {
+      notify(e.response?.data?.error || 'Failed to load VM metrics', 'error')
+    } finally {
+      setLoading(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    load(true)
+    timerRef.current = setInterval(() => load(false), refreshMs)
+    return () => clearInterval(timerRef.current)
+  }, [load, refreshMs])
+
+  if (loading) return (
+    <div className="flex items-center gap-2 text-slate-400 py-16 justify-center">
+      <Loader2 size={20} className="animate-spin" /> Loading VM metrics…
+    </div>
+  )
+  if (!data) return null
+
+  if (data.length === 0) return (
+    <div className="flex flex-col items-center justify-center py-20 text-slate-500">
+      <Server size={40} className="mb-4 opacity-30" />
+      <p className="text-sm">No running VMs found.</p>
+    </div>
+  )
+
+  return (
+    <div className="space-y-5">
+      {/* Summary cards grid */}
+      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+        {data.map((vm, i) => (
+          <div key={vm.uuid}
+            className="bg-navy-800 border border-navy-600 rounded-xl p-5 ring-1 ring-sky-400/10">
+            <div className="flex items-center gap-2 mb-4">
+              <div className="p-2 rounded-lg bg-sky-400/10">
+                <Server size={14} className="text-sky-400" />
+              </div>
+              <div>
+                <div className="text-slate-200 text-sm font-semibold">{vm.name}</div>
+                <div className="text-slate-500 text-xs font-mono truncate w-40" title={vm.uuid}>
+                  {vm.uuid.slice(0, 8)}…
+                </div>
+              </div>
+            </div>
+
+            {/* Stats grid */}
+            <div className="grid grid-cols-2 gap-3 mb-4">
+              {/* CPU */}
+              <div className="bg-navy-700/50 rounded-lg p-3">
+                <div className="text-slate-400 text-xs mb-1 flex items-center gap-1">
+                  <Cpu size={11} /> CPU
+                </div>
+                <div className="text-sky-300 text-lg font-bold font-mono">
+                  {vm.cpu_pct != null ? `${vm.cpu_pct.toFixed(1)}%` : '—'}
+                </div>
+                {vm.cpu_pct != null && (
+                  <div className="mt-1.5 w-full bg-navy-600 rounded-full h-1">
+                    <div className={`h-1 rounded-full ${vm.cpu_pct > 85 ? 'bg-red-500' : vm.cpu_pct > 65 ? 'bg-yellow-500' : 'bg-sky-500'}`}
+                      style={{ width: `${Math.min(vm.cpu_pct, 100)}%` }} />
+                  </div>
+                )}
+              </div>
+
+              {/* Memory */}
+              <div className="bg-navy-700/50 rounded-lg p-3">
+                <div className="text-slate-400 text-xs mb-1 flex items-center gap-1">
+                  <MemoryStick size={11} /> Mem
+                </div>
+                <div className="text-purple-300 text-lg font-bold font-mono">
+                  {vm.mem_pct != null ? `${vm.mem_pct.toFixed(1)}%` : '—'}
+                </div>
+                <div className="text-slate-500 text-xs mt-0.5">
+                  {vm.mem_used != null ? `${bytes(vm.mem_used, 0)} / ${bytes(vm.mem_total, 0)}` : ''}
+                </div>
+                {vm.mem_pct != null && (
+                  <div className="mt-1.5 w-full bg-navy-600 rounded-full h-1">
+                    <div className={`h-1 rounded-full ${vm.mem_pct > 85 ? 'bg-red-500' : vm.mem_pct > 65 ? 'bg-yellow-500' : 'bg-purple-500'}`}
+                      style={{ width: `${Math.min(vm.mem_pct, 100)}%` }} />
+                  </div>
+                )}
+              </div>
+
+              {/* Network */}
+              <div className="bg-navy-700/50 rounded-lg p-3">
+                <div className="text-slate-400 text-xs mb-1 flex items-center gap-1">
+                  <Network size={11} /> Network
+                </div>
+                <div className="text-green-300 text-xs font-mono space-y-0.5">
+                  <div>↓ {vm.net_rx_rate != null ? bytes(vm.net_rx_rate) + '/s' : '—'}</div>
+                  <div>↑ {vm.net_tx_rate != null ? bytes(vm.net_tx_rate) + '/s' : '—'}</div>
+                </div>
+              </div>
+
+              {/* Disk */}
+              <div className="bg-navy-700/50 rounded-lg p-3">
+                <div className="text-slate-400 text-xs mb-1 flex items-center gap-1">
+                  <HardDrive size={11} /> Disk I/O
+                </div>
+                <div className="text-orange-300 text-xs font-mono space-y-0.5">
+                  <div>R {vm.disk_r_rate != null ? bytes(vm.disk_r_rate) + '/s' : '—'}</div>
+                  <div>W {vm.disk_w_rate != null ? bytes(vm.disk_w_rate) + '/s' : '—'}</div>
+                </div>
+              </div>
+            </div>
+
+            {/* Mini CPU history sparkline for this VM */}
+            {history[vm.uuid]?.length > 2 && (
+              <ResponsiveContainer width="100%" height={60}>
+                <AreaChart data={history[vm.uuid]} margin={{ top: 0, right: 0, bottom: 0, left: 0 }}>
+                  <defs>
+                    <linearGradient id={`gvm${i}`} x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="5%"  stopColor={CHART_COLORS[i % CHART_COLORS.length]} stopOpacity={0.3} />
+                      <stop offset="95%" stopColor={CHART_COLORS[i % CHART_COLORS.length]} stopOpacity={0} />
+                    </linearGradient>
+                  </defs>
+                  <YAxis domain={[0, 100]} hide />
+                  <Tooltip content={<ChartTooltip formatter={v => `${v?.toFixed(1)}%`} />} />
+                  <Area type="monotone" dataKey="cpu" name="CPU"
+                    stroke={CHART_COLORS[i % CHART_COLORS.length]}
+                    fill={`url(#gvm${i})`}
+                    strokeWidth={1.5} dot={false} isAnimationActive={false} />
+                </AreaChart>
+              </ResponsiveContainer>
+            )}
+          </div>
+        ))}
+      </div>
+
+      {/* Combined CPU chart — all VMs */}
+      {data.length > 0 && Object.keys(history).length > 0 && (() => {
+        // Build merged dataset keyed by timestamp
+        const tsSet = new Set()
+        Object.values(history).forEach(pts => pts.forEach(p => tsSet.add(p.t)))
+        const sorted = [...tsSet].sort()
+        const byUuid = {}
+        Object.entries(history).forEach(([uuid, pts]) => {
+          byUuid[uuid] = Object.fromEntries(pts.map(p => [p.t, p.cpu]))
+        })
+        const merged = sorted.map(ts => {
+          const pt = { t: ts }
+          data.forEach(vm => { pt[vm.name] = byUuid[vm.uuid]?.[ts] ?? null })
+          return pt
+        })
+        return (
+          <ChartCard title="CPU % — All VMs" icon={Cpu}>
+            <ResponsiveContainer width="100%" height={220}>
+              <LineChart data={merged}>
+                <CartesianGrid stroke={GRID_STROKE} vertical={false} />
+                <XAxis dataKey="t" tickFormatter={fmtTs} tick={AXIS_STYLE} minTickGap={60} />
+                <YAxis tick={AXIS_STYLE} domain={[0, 100]} tickFormatter={v => `${v}%`} width={42} />
+                <Tooltip content={<ChartTooltip formatter={v => `${v?.toFixed(1)}%`} />} />
+                <Legend wrapperStyle={{ fontSize: 11, color: '#94a3b8' }} />
+                {data.map((vm, i) => (
+                  <Line key={vm.uuid} type="monotone" dataKey={vm.name}
+                    stroke={CHART_COLORS[i % CHART_COLORS.length]}
+                    strokeWidth={1.5} dot={false} isAnimationActive={false} />
+                ))}
+              </LineChart>
+            </ResponsiveContainer>
+          </ChartCard>
+        )
+      })()}
+
+      {/* Combined network chart */}
+      {data.length > 0 && Object.keys(history).length > 0 && (() => {
+        const tsSet = new Set()
+        Object.values(history).forEach(pts => pts.forEach(p => tsSet.add(p.t)))
+        const sorted = [...tsSet].sort()
+        const byUuid = {}
+        Object.entries(history).forEach(([uuid, pts]) => {
+          byUuid[uuid] = Object.fromEntries(pts.map(p => [p.t, { rx: p.net_rx, tx: p.net_tx }]))
+        })
+        const merged = sorted.map(ts => {
+          const pt = { t: ts }
+          data.forEach(vm => {
+            pt[`${vm.name} ↓`] = byUuid[vm.uuid]?.[ts]?.rx ?? null
+            pt[`${vm.name} ↑`] = byUuid[vm.uuid]?.[ts]?.tx ?? null
+          })
+          return pt
+        })
+        const keys = data.flatMap((vm, i) => [
+          { key: `${vm.name} ↓`, color: CHART_COLORS[i % CHART_COLORS.length] },
+          { key: `${vm.name} ↑`, color: CHART_COLORS[(i + 4) % CHART_COLORS.length] },
+        ])
+        return (
+          <ChartCard title="Network I/O — All VMs" icon={Network}>
+            <ResponsiveContainer width="100%" height={200}>
+              <LineChart data={merged}>
+                <CartesianGrid stroke={GRID_STROKE} vertical={false} />
+                <XAxis dataKey="t" tickFormatter={fmtTs} tick={AXIS_STYLE} minTickGap={60} />
+                <YAxis tick={AXIS_STYLE} tickFormatter={v => bytes(v, 0) + '/s'} width={68} />
+                <Tooltip content={<ChartTooltip formatter={v => bytes(v) + '/s'} />} />
+                <Legend wrapperStyle={{ fontSize: 10, color: '#94a3b8' }} />
+                {keys.map(({ key, color }) => (
+                  <Line key={key} type="monotone" dataKey={key}
+                    stroke={color} strokeWidth={1.5} dot={false} isAnimationActive={false} />
+                ))}
+              </LineChart>
+            </ResponsiveContainer>
+          </ChartCard>
+        )
+      })()}
+    </div>
+  )
+}
+
 // ── Main page ─────────────────────────────────────────────────────────────────
 
 const TABS = [
   { id: 'system', label: 'System',  icon: Activity },
   { id: 'docker', label: 'Docker',  icon: Container },
+  { id: 'vms',    label: 'VMs',     icon: Server },
 ]
 
 export default function Metrics() {
@@ -526,6 +772,7 @@ export default function Metrics() {
       {/* Tab content — key forces remount on range or refresh change */}
       {tab === 'system' && <SystemTab key={`sys-${minutes}-${refreshMs}`} minutes={minutes} refreshMs={refreshMs} notify={notify} />}
       {tab === 'docker' && <DockerTab key={`doc-${minutes}-${refreshMs}`} minutes={minutes} refreshMs={refreshMs} notify={notify} />}
+      {tab === 'vms'    && <VMsTab   key={`vms-${refreshMs}`}                                refreshMs={refreshMs} notify={notify} />}
 
       {/* Toast */}
       {toast.msg && (
