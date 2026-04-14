@@ -72,7 +72,7 @@ def login():
     password = str(data.get('password', ''))[:256]
     if not username or not password:
         return jsonify({'success': False, 'error': 'Invalid credentials'})
-    if simplepam.authenticate(username, password):
+    if simplepam.authenticate(username, password, service='vm-manager'):
         session.clear()          # prevent session fixation
         session['username'] = username
         session.permanent = bool(data.get('remember_me'))
