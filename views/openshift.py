@@ -429,7 +429,20 @@ def delete_job(job_id):
 # ── VM XML generation ─────────────────────────────────────────────────────────
 
 def _vm_xml(name: str, vcpus: int, ram_mb: int, disk_path: str,
-             iso_path: str, network: str = 'default') -> str:
+             iso_path: str, network: str = 'default',
+             host_bridge: bool = False) -> str:
+    # libvirt-managed network vs host bridge (e.g. br-real) need different XML
+    if host_bridge:
+        iface_xml = f"""<interface type='bridge'>
+      <source bridge='{network}'/>
+      <model type='virtio'/>
+    </interface>"""
+    else:
+        iface_xml = f"""<interface type='network'>
+      <source network='{network}'/>
+      <model type='virtio'/>
+    </interface>"""
+
     return f"""
 <domain type='kvm'>
   <name>{name}</name>
@@ -438,31 +451,25 @@ def _vm_xml(name: str, vcpus: int, ram_mb: int, disk_path: str,
   <vcpu>{vcpus}</vcpu>
   <os>
     <type arch='x86_64' machine='q35'>hvm</type>
-    <boot dev='hd'/>
-    <boot dev='cdrom'/>
-    <bootmenu enable='yes' timeout='3000'/>
   </os>
   <features><acpi/><apic/></features>
   <cpu mode='host-passthrough'/>
   <clock offset='utc'/>
   <devices>
-    <disk type='file' device='disk'>
-      <driver name='qemu' type='qcow2' cache='none'/>
-      <source file='{disk_path}'/>
-      <target dev='vda' bus='virtio'/>
-      <boot order='1'/>
-    </disk>
     <disk type='file' device='cdrom'>
       <driver name='qemu' type='raw'/>
       <source file='{iso_path}'/>
       <target dev='sda' bus='sata'/>
       <readonly/>
+      <boot order='1'/>
+    </disk>
+    <disk type='file' device='disk'>
+      <driver name='qemu' type='qcow2' cache='none'/>
+      <source file='{disk_path}'/>
+      <target dev='vda' bus='virtio'/>
       <boot order='2'/>
     </disk>
-    <interface type='network'>
-      <source network='{network}'/>
-      <model type='virtio'/>
-    </interface>
+    {iface_xml}
     <graphics type='vnc' port='-1' autoport='yes' listen='127.0.0.1'>
       <listen type='address' address='127.0.0.1'/>
     </graphics>
@@ -622,13 +629,17 @@ def _run_deploy(job_id: str, cfg: dict):
                     fail(f'qemu-img failed for {vm_name}: {r.stderr}')
                     return
 
+                net_name = cfg.get('libvirt_network', 'default')
+                # Detect host bridges (br-real etc) — need type='bridge' XML
+                is_host_bridge = os.path.isdir(f'/sys/class/net/{net_name}/bridge')
                 xml = _vm_xml(
-                    name    = vm_name,
-                    vcpus   = vcpus,
-                    ram_mb  = ram_mb,
+                    name      = vm_name,
+                    vcpus     = vcpus,
+                    ram_mb    = ram_mb,
                     disk_path = str(disk_path),
                     iso_path  = str(iso_path),
-                    network   = cfg.get('libvirt_network', 'default'),
+                    network   = net_name,
+                    host_bridge = is_host_bridge,
                 )
                 dom = conn.defineXML(xml)
                 dom.create()
