@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, useCallback } from 'react'
 import api from '../api'
 import {
   Folder, FolderOpen, File, FileText, FileCode, FileImage,
-  Upload, Download, Trash2, Edit3, FolderPlus, RotateCcw,
+  Upload, Download, Trash2, Edit3, FolderPlus, FilePlus, RotateCcw,
   Home, ChevronRight, ArrowLeft, X, Save, AlertCircle,
   Loader2, RefreshCw, HardDrive, Copy, Check
 } from 'lucide-react'
@@ -212,11 +212,14 @@ export default function Files() {
   const [renaming, setRenaming]   = useState(null)    // entry
   const [newFolderMode, setNewFolderMode] = useState(false)
   const [newFolderName, setNewFolderName] = useState('')
+  const [newFileMode, setNewFileMode]   = useState(false)
+  const [newFileName, setNewFileName]   = useState('')
   const [toast, setToast]         = useState({ msg: '', type: 'ok' })
   const [deleting, setDeleting]   = useState(false)
   const [copied, setCopied]       = useState(false)
   const uploadRef = useRef(null)
   const newFolderRef = useRef(null)
+  const newFileRef   = useRef(null)
 
   const notify = useCallback((msg, type = 'ok') => {
     setToast({ msg, type })
@@ -297,6 +300,15 @@ export default function Files() {
     } catch (e) {
       notify(e.response?.data?.error || 'Failed to create folder', 'error')
     }
+  }
+
+  const doNewFile = () => {
+    const name = newFileName.trim()
+    if (!name) { setNewFileMode(false); return }
+    const path = (cwd === '/' ? '' : cwd) + '/' + name
+    setNewFileMode(false)
+    setNewFileName('')
+    setEditor(path)   // open editor; first save creates the file
   }
 
   const doUpload = async (e) => {
@@ -393,8 +405,14 @@ export default function Files() {
 
           <div className="w-px h-5 bg-navy-600" />
 
+          {/* New file */}
+          <button onClick={() => { setNewFolderMode(false); setNewFileMode(true); setTimeout(() => newFileRef.current?.focus(), 50) }}
+            className="flex items-center gap-1.5 text-xs text-slate-400 hover:text-sky-300 hover:bg-navy-700 px-2 py-1.5 rounded transition-colors">
+            <FilePlus size={14} /> New file
+          </button>
+
           {/* New folder */}
-          <button onClick={() => { setNewFolderMode(true); setTimeout(() => newFolderRef.current?.focus(), 50) }}
+          <button onClick={() => { setNewFileMode(false); setNewFolderMode(true); setTimeout(() => newFolderRef.current?.focus(), 50) }}
             className="flex items-center gap-1.5 text-xs text-slate-400 hover:text-sky-300 hover:bg-navy-700 px-2 py-1.5 rounded transition-colors">
             <FolderPlus size={14} /> New folder
           </button>
@@ -462,6 +480,33 @@ export default function Files() {
               Create
             </button>
             <button onClick={() => { setNewFolderMode(false); setNewFolderName('') }}
+              className="text-slate-400 hover:text-white p-1">
+              <X size={14} />
+            </button>
+          </div>
+        )}
+
+        {/* New file inline input */}
+        {newFileMode && (
+          <div className="flex items-center gap-2 px-4 py-2 bg-navy-700/50 border-b border-navy-600">
+            <FilePlus size={14} className="text-green-400" />
+            <input
+              ref={newFileRef}
+              value={newFileName}
+              onChange={e => setNewFileName(e.target.value)}
+              onKeyDown={e => {
+                if (e.key === 'Enter')  doNewFile()
+                if (e.key === 'Escape') { setNewFileMode(false); setNewFileName('') }
+              }}
+              placeholder="filename.txt"
+              className="bg-navy-800 border border-green-500 rounded px-2 py-1 text-sm text-slate-200
+                         focus:outline-none w-64 font-mono"
+            />
+            <button onClick={doNewFile}
+              className="text-xs bg-green-700 hover:bg-green-600 text-white px-3 py-1 rounded">
+              Create &amp; edit
+            </button>
+            <button onClick={() => { setNewFileMode(false); setNewFileName('') }}
               className="text-slate-400 hover:text-white p-1">
               <X size={14} />
             </button>
