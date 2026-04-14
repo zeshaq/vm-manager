@@ -155,7 +155,7 @@ function ContainersTab({ notify }) {
   const load = useCallback(async () => {
     setLoading(true)
     try {
-      const r = await api.get('/api/docker/containers')
+      const r = await api.get('/docker/containers')
       setContainers(r.data)
     } catch (e) {
       notify(e.response?.data?.error || 'Failed to load containers', 'error')
@@ -169,7 +169,7 @@ function ContainersTab({ notify }) {
   const action = async (id, endpoint, method = 'post') => {
     setBusy(b => ({ ...b, [id]: true }))
     try {
-      await api[method](`/api/docker/containers/${id}/${endpoint}`)
+      await api[method](`/docker/containers/${id}/${endpoint}`)
       notify(`Done`, 'ok')
       await load()
     } catch (e) {
@@ -183,7 +183,7 @@ function ContainersTab({ notify }) {
     if (!confirm(`Remove container "${name}"?`)) return
     setBusy(b => ({ ...b, [id]: true }))
     try {
-      await api.delete(`/api/docker/containers/${id}?force=true`)
+      await api.delete(`/docker/containers/${id}?force=true`)
       notify('Container removed', 'ok')
       setContainers(cs => cs.filter(c => c.id !== id))
     } catch (e) {
@@ -201,7 +201,7 @@ function ContainersTab({ notify }) {
     setExpandedLogs(l => ({ ...l, [id]: true }))
     if (!logs[id]) {
       try {
-        const r = await api.get(`/api/docker/containers/${id}/logs?tail=100`)
+        const r = await api.get(`/docker/containers/${id}/logs?tail=100`)
         setLogs(l => ({ ...l, [id]: r.data.logs }))
       } catch {
         setLogs(l => ({ ...l, [id]: 'Failed to load logs.' }))
@@ -306,7 +306,7 @@ function ImagesTab({ notify }) {
   const load = useCallback(async () => {
     setLoading(true)
     try {
-      const r = await api.get('/api/docker/images')
+      const r = await api.get('/docker/images')
       setImages(r.data)
     } catch (e) {
       notify(e.response?.data?.error || 'Failed to load images', 'error')
@@ -322,7 +322,7 @@ function ImagesTab({ notify }) {
     if (!name) return
     setPulling(true)
     try {
-      await api.post('/api/docker/images/pull', { image: name })
+      await api.post('/docker/images/pull', { image: name })
       notify(`Pulled ${name}`, 'ok')
       setPullName('')
       await load()
@@ -337,7 +337,7 @@ function ImagesTab({ notify }) {
     if (!confirm(`Remove image "${tag || id}"?`)) return
     setBusy(b => ({ ...b, [id]: true }))
     try {
-      await api.post('/api/docker/images/remove', { id, force: false })
+      await api.post('/docker/images/remove', { id, force: false })
       notify('Image removed', 'ok')
       setImages(imgs => imgs.filter(i => i.id !== id))
     } catch (e) {
@@ -418,7 +418,7 @@ function NetworksTab({ notify }) {
   const load = useCallback(async () => {
     setLoading(true)
     try {
-      const r = await api.get('/api/docker/networks')
+      const r = await api.get('/docker/networks')
       setNetworks(r.data)
     } catch (e) {
       notify(e.response?.data?.error || 'Failed to load networks', 'error')
@@ -433,7 +433,7 @@ function NetworksTab({ notify }) {
     if (!form.name.trim()) return
     setCreating(true)
     try {
-      await api.post('/api/docker/networks', form)
+      await api.post('/docker/networks', form)
       notify('Network created', 'ok')
       setForm({ name: '', driver: 'bridge' })
       setShowForm(false)
@@ -449,7 +449,7 @@ function NetworksTab({ notify }) {
     if (!confirm(`Remove network "${name}"?`)) return
     setBusy(b => ({ ...b, [id]: true }))
     try {
-      await api.delete(`/api/docker/networks/${id}`)
+      await api.delete(`/docker/networks/${id}`)
       notify('Network removed', 'ok')
       setNetworks(ns => ns.filter(n => n.id !== id))
     } catch (e) {
@@ -553,7 +553,7 @@ function VolumesTab({ notify }) {
   const load = useCallback(async () => {
     setLoading(true)
     try {
-      const r = await api.get('/api/docker/volumes')
+      const r = await api.get('/docker/volumes')
       setVolumes(r.data)
     } catch (e) {
       notify(e.response?.data?.error || 'Failed to load volumes', 'error')
@@ -568,7 +568,7 @@ function VolumesTab({ notify }) {
     if (!confirm(`Remove volume "${name}"?`)) return
     setBusy(b => ({ ...b, [name]: true }))
     try {
-      await api.delete(`/api/docker/volumes/${encodeURIComponent(name)}`)
+      await api.delete(`/docker/volumes/${encodeURIComponent(name)}`)
       notify('Volume removed', 'ok')
       setVolumes(vs => vs.filter(v => v.name !== name))
     } catch (e) {
@@ -636,7 +636,7 @@ export default function Docker() {
   const clearToast = () => setToast({ msg: '', type: 'ok' })
 
   useEffect(() => {
-    api.get('/api/docker/info')
+    api.get('/docker/info')
       .then(r => setInfo(r.data))
       .catch(() => setDockerAvailable(false))
   }, [])
