@@ -14,6 +14,7 @@ import {
   Files,
   Layers,
   Image,
+  Boxes,
   Settings,
   Shield,
   ChevronDown,
@@ -39,10 +40,11 @@ const vmNavItems = [
 ]
 
 const infraNavItems = [
-  { to: '/docker', label: 'Docker', icon: Container },
-  { to: '/kubernetes', label: 'Kubernetes', icon: Layers },
-  { to: '/network', label: 'Network', icon: Network },
-  { to: '/files', label: 'File Manager', icon: Files },
+  { to: '/docker',     label: 'Docker',      icon: Container },
+  { to: '/kubernetes', label: 'Kubernetes',  icon: Layers },
+  { to: '/openshift',  label: 'OpenShift',   icon: Boxes },
+  { to: '/network',    label: 'Network',     icon: Network },
+  { to: '/files',      label: 'File Manager', icon: Files },
 ]
 
 const systemNavItems = [
@@ -126,6 +128,7 @@ export default function Layout({ children, username, onLogout }) {
     if (p === '/files')               return 'File Manager'
     if (p === '/images')              return 'Images'
     if (p === '/kubernetes')          return 'Kubernetes'
+    if (p === '/openshift')           return 'OpenShift Deployment'
     if (p === '/system/processes')    return 'Processes'
     if (p === '/system/services')     return 'System Services'
     if (p === '/system/firewall')     return 'Firewall (UFW)'

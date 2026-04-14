@@ -21,6 +21,7 @@ from views.kubernetes import k8s_bp
 from views.images import images_bp
 from views.console import console_bp
 from views.system_mgmt import system_bp
+from views.openshift import ocp_bp
 
 from sockets import sock
 
@@ -77,6 +78,7 @@ app.register_blueprint(k8s_bp)
 app.register_blueprint(images_bp)
 app.register_blueprint(console_bp)
 app.register_blueprint(system_bp)
+app.register_blueprint(ocp_bp)
 
 @app.route('/login')
 @app.route('/logout')

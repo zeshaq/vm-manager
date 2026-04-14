@@ -12,3 +12,4 @@ psutil
 flask-limiter
 docker
 pyyaml
+requests

@@ -22,6 +22,7 @@ import SystemProcesses from './pages/SystemProcesses'
 import SystemServices from './pages/SystemServices'
 import Firewall from './pages/Firewall'
 import Security from './pages/Security'
+import OpenShiftPage from './pages/OpenShift'
 
 function PrivateRoute({ children, authState }) {
   if (authState === 'loading') {
@@ -88,6 +89,7 @@ export default function App() {
                 <Route path="/system/services"  element={<SystemServices />} />
                 <Route path="/system/firewall"  element={<Firewall />} />
                 <Route path="/system/security"  element={<Security />} />
+                <Route path="/openshift"        element={<OpenShiftPage />} />
                 <Route path="*" element={<Navigate to="/" replace />} />
               </Routes>
             </Layout>
