@@ -520,6 +520,39 @@ function StepNodes({ form, set, onNext, onBack }) {
   )
 }
 
+// ── Static IP helpers ─────────────────────────────────────────────────────────
+
+function cidrBase(cidr) {
+  if (!cidr) return null
+  const parts = cidr.split('/')[0].split('.')
+  return parts.length === 4 ? parts : null
+}
+
+function suggestGateway(cidr) {
+  const parts = cidrBase(cidr)
+  return parts ? `${parts[0]}.${parts[1]}.${parts[2]}.1` : ''
+}
+
+function suggestNodeIPs(cidr, nodeList) {
+  const parts = cidrBase(cidr)
+  if (!parts) return []
+  return nodeList.map((node, i) => ({
+    name: node.name,
+    ip:   `${parts[0]}.${parts[1]}.${parts[2]}.${10 + i}`,
+  }))
+}
+
+function buildNodeList(form) {
+  const isSNO   = form.deployment_type === 'sno'
+  const name    = form.cluster_name || 'cluster'
+  const nCtrl   = isSNO ? 1 : (parseInt(form.control_plane_count) || 3)
+  const nWorker = isSNO ? 0 : (parseInt(form.worker_count) || 0)
+  return [
+    ...Array.from({ length: nCtrl },   (_, i) => ({ name: isSNO ? `${name}-sno` : `${name}-master-${i}`, role: 'control-plane' })),
+    ...Array.from({ length: nWorker }, (_, i) => ({ name: `${name}-worker-${i}`,                          role: 'worker' })),
+  ]
+}
+
 // ── Step 4: Network ───────────────────────────────────────────────────────────
 
 const FWD_BADGE = {
@@ -666,6 +699,99 @@ function StepNetwork({ form, set, onNext, onBack }) {
         <p className="text-slate-600 text-xs">These are internal to the cluster — defaults work for most setups.</p>
       </div>
 
+      {/* Static IP Configuration */}
+      {(() => {
+        const nodeList = buildNodeList(form)
+        const toggleStatic = () => {
+          const enabling = !form.static_ip_enabled
+          set('static_ip_enabled', enabling)
+          if (enabling) {
+            if (!form.gateway)    set('gateway', suggestGateway(form.machine_cidr))
+            if (!form.node_ips?.length) set('node_ips', suggestNodeIPs(form.machine_cidr, nodeList))
+          }
+        }
+        const updateNodeIP = (nodeName, ip) => {
+          const updated = [...(form.node_ips || [])]
+          const idx = updated.findIndex(n => n.name === nodeName)
+          if (idx >= 0) updated[idx] = { ...updated[idx], ip }
+          else          updated.push({ name: nodeName, ip })
+          set('node_ips', updated)
+        }
+        return (
+          <div className="bg-navy-800 border border-navy-600 rounded-xl overflow-hidden">
+            {/* Toggle header */}
+            <button type="button" onClick={toggleStatic}
+              className="w-full flex items-center justify-between px-4 py-3 hover:bg-navy-700/50 transition-colors">
+              <div className="flex items-center gap-2.5">
+                <Network size={14} className="text-sky-400" />
+                <span className="text-sm font-medium text-slate-200">Static IP Configuration</span>
+                <span className="text-slate-500 text-xs">(optional — DHCP is used if disabled)</span>
+              </div>
+              <div className={`flex items-center gap-2`}>
+                <div className={`relative w-10 h-5 rounded-full transition-colors ${form.static_ip_enabled ? 'bg-sky-600' : 'bg-navy-500'}`}>
+                  <div className={`absolute top-0.5 w-4 h-4 bg-white rounded-full shadow transition-all ${form.static_ip_enabled ? 'left-5' : 'left-0.5'}`} />
+                </div>
+              </div>
+            </button>
+
+            {form.static_ip_enabled && (
+              <div className="px-4 pb-5 pt-4 border-t border-navy-600 space-y-4">
+                <div className="grid grid-cols-2 gap-4">
+                  <Field label="Default Gateway" required hint="Router IP on your libvirt network">
+                    <input value={form.gateway}
+                      onChange={e => set('gateway', e.target.value)}
+                      placeholder={suggestGateway(form.machine_cidr) || '192.168.122.1'}
+                      className={inputCls + ' font-mono'} />
+                  </Field>
+                  <Field label="DNS Servers" hint="Comma-separated — used inside cluster nodes">
+                    <input value={form.dns_servers}
+                      onChange={e => set('dns_servers', e.target.value)}
+                      placeholder="8.8.8.8,8.8.4.4"
+                      className={inputCls + ' font-mono text-xs'} />
+                  </Field>
+                </div>
+
+                <div>
+                  <div className="flex items-center justify-between mb-2">
+                    <label className={labelCls}>Node IP Addresses</label>
+                    <button type="button"
+                      onClick={() => set('node_ips', suggestNodeIPs(form.machine_cidr, nodeList))}
+                      className="text-xs text-sky-400 hover:text-sky-300 transition-colors flex items-center gap-1">
+                      <RefreshCw size={10} /> Auto-fill from CIDR
+                    </button>
+                  </div>
+                  <div className="space-y-2">
+                    {nodeList.map((node) => {
+                      const entry = (form.node_ips || []).find(n => n.name === node.name)
+                      return (
+                        <div key={node.name} className="flex items-center gap-3">
+                          <div className="flex items-center gap-1.5 w-52 flex-shrink-0">
+                            <span className={`text-xs px-1.5 py-0.5 rounded-full font-medium ${
+                              node.role === 'control-plane'
+                                ? 'bg-blue-500/15 text-blue-300'
+                                : 'bg-green-500/15 text-green-300'
+                            }`}>{node.role === 'control-plane' ? 'ctrl' : 'worker'}</span>
+                            <span className="text-slate-300 text-xs font-mono truncate">{node.name}</span>
+                          </div>
+                          <input
+                            value={entry?.ip || ''}
+                            onChange={e => updateNodeIP(node.name, e.target.value)}
+                            placeholder="192.168.122.10"
+                            className={inputCls + ' font-mono flex-1'} />
+                        </div>
+                      )
+                    })}
+                  </div>
+                  <p className="text-slate-600 text-xs mt-2">
+                    Each node gets a fixed IP. Make sure these are outside your DHCP range.
+                  </p>
+                </div>
+              </div>
+            )}
+          </div>
+        )
+      })()}
+
       {isSNO && (
         <div className="bg-yellow-900/20 border border-yellow-700/40 rounded-xl p-4 text-xs text-yellow-300 space-y-1">
           <div className="font-semibold flex items-center gap-1.5"><AlertTriangle size={13} /> DNS required after install</div>
@@ -678,7 +804,11 @@ function StepNetwork({ form, set, onNext, onBack }) {
       )}
 
       <NavButtons onBack={onBack} onNext={onNext}
-        nextDisabled={!form.machine_cidr || (!isSNO && (!form.api_vip || !form.ingress_vip))} />
+        nextDisabled={
+          !form.machine_cidr ||
+          (!isSNO && (!form.api_vip || !form.ingress_vip)) ||
+          (form.static_ip_enabled && !form.gateway)
+        } />
     </div>
   )
 }
@@ -729,6 +859,9 @@ function StepReview({ form, onDeploy, onBack, deploying }) {
           <Row label="Machine CIDR" value={form.machine_cidr} mono />
           {!isSNO && <Row label="API VIP"    value={form.api_vip} mono />}
           {!isSNO && <Row label="Ingress VIP" value={form.ingress_vip} mono />}
+          {form.static_ip_enabled && <Row label="IP Config" value="Static" />}
+          {form.static_ip_enabled && form.gateway && <Row label="Gateway" value={form.gateway} mono />}
+          {form.static_ip_enabled && form.dns_servers && <Row label="DNS" value={form.dns_servers} mono />}
         </div>
       </div>
 
@@ -1030,6 +1163,11 @@ const DEFAULTS = {
   ingress_vip:          '',
   cluster_cidr:         '10.128.0.0/14',
   service_cidr:         '172.30.0.0/16',
+  // Static IP
+  static_ip_enabled:    false,
+  gateway:              '',
+  dns_servers:          '8.8.8.8,8.8.4.4',
+  node_ips:             [],   // [{name, ip}]
 }
 
 export default function OpenShiftPage() {

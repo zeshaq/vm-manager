@@ -528,20 +528,67 @@ def _reboot_vms(vm_names: list, log_fn):
     conn.close()
 
 
+# ── MAC address generation ────────────────────────────────────────────────────
+
+def _make_mac(job_id: str, node_idx: int) -> str:
+    """Deterministic KVM MAC address (52:54:00:XX:XX:XX) for a deployment node.
+    Same job+index always produces the same MAC so nmstate static config
+    generated at infra-env creation time matches the actual VM NIC.
+    """
+    h = hashlib.md5(f'{job_id}:{node_idx}'.encode()).hexdigest()
+    return f'52:54:00:{h[0:2]}:{h[2:4]}:{h[4:6]}'
+
+
+# ── nmstate YAML builder ──────────────────────────────────────────────────────
+
+def _build_nmstate_yaml(mac: str, ip: str, prefix_len: int,
+                        gateway: str, dns_list: list) -> str:
+    """Build nmstate YAML for one node (Assisted Installer static_network_config)."""
+    dns_entries = ''.join(f'\n      - {d}' for d in dns_list)
+    routes_section = ''
+    if gateway:
+        routes_section = (
+            f'routes:\n'
+            f'  config:\n'
+            f'    - destination: 0.0.0.0/0\n'
+            f'      next-hop-address: {gateway}\n'
+            f'      next-hop-interface: eth0\n'
+        )
+    return (
+        f'interfaces:\n'
+        f'  - name: eth0\n'
+        f'    type: ethernet\n'
+        f'    state: up\n'
+        f'    mac-address: "{mac}"\n'
+        f'    ipv4:\n'
+        f'      enabled: true\n'
+        f'      dhcp: false\n'
+        f'      address:\n'
+        f'        - ip: {ip}\n'
+        f'          prefix-length: {prefix_len}\n'
+        f'dns-resolver:\n'
+        f'  config:\n'
+        f'    server:{dns_entries}\n'
+        + routes_section
+    )
+
+
 # ── VM XML generation ─────────────────────────────────────────────────────────
 
 def _vm_xml(name: str, vcpus: int, ram_mb: int, disk_path: str,
              iso_path: str, network: str = 'default',
-             host_bridge: bool = False, extra_disks: list = None) -> str:
+             host_bridge: bool = False, extra_disks: list = None,
+             mac_address: str = None) -> str:
     # libvirt-managed network vs host bridge (e.g. br-real) need different XML
+    mac_xml = f"\n      <mac address='{mac_address}'/>" if mac_address else ''
     if host_bridge:
         iface_xml = f"""<interface type='bridge'>
-      <source bridge='{network}'/>
+      <source bridge='{network}'/>{mac_xml}
       <model type='virtio'/>
     </interface>"""
     else:
         iface_xml = f"""<interface type='network'>
-      <source network='{network}'/>
+      <source network='{network}'/>{mac_xml}
       <model type='virtio'/>
     </interface>"""
 
@@ -620,6 +667,16 @@ def _run_deploy(job_id: str, cfg: dict):
         n_workers       = 0 if is_sno else int(cfg.get('worker_count', 2))
         total_nodes     = n_control + n_workers
 
+        # Pre-compute VM names + deterministic MAC addresses so they can be
+        # referenced in both the infra-env (static_network_config) and
+        # the libvirt XML (NIC MAC address) and they always match.
+        if is_sno:
+            vm_names_pre = [f'{cluster_name}-sno']
+        else:
+            vm_names_pre  = [f'{cluster_name}-master-{i}' for i in range(n_control)]
+            vm_names_pre += [f'{cluster_name}-worker-{i}' for i in range(n_workers)]
+        mac_map = {name: _make_mac(job_id, i) for i, name in enumerate(vm_names_pre)}
+
         # ── Step 1: Auth ──────────────────────────────────────────────────────
         phase('Authenticating with Red Hat', 5)
         try:
@@ -668,6 +725,40 @@ def _run_deploy(job_id: str, cfg: dict):
             'ssh_authorized_key': cfg.get('ssh_public_key', ''),
             'image_type':         'minimal-iso',
         }
+
+        # Static network configuration — only if the user requested it
+        if cfg.get('static_ip_enabled') and cfg.get('node_ips'):
+            import ipaddress as _ipaddress
+            machine_cidr = cfg.get('machine_cidr', '192.168.122.0/24')
+            try:
+                prefix_len = int(_ipaddress.ip_network(machine_cidr, strict=False).prefixlen)
+            except Exception:
+                prefix_len = 24
+
+            gateway  = cfg.get('gateway', '').strip()
+            dns_raw  = cfg.get('dns_servers', '8.8.8.8').strip()
+            dns_list = [s.strip() for s in dns_raw.split(',') if s.strip()] or ['8.8.8.8']
+
+            # Build per-node nmstate entries; skip nodes with no IP configured
+            node_ip_map = {e['name']: e['ip'] for e in cfg['node_ips'] if e.get('ip')}
+            static_cfg  = []
+            for vm_name in vm_names_pre:
+                ip = node_ip_map.get(vm_name, '').strip()
+                if not ip:
+                    continue
+                mac = mac_map[vm_name]
+                network_yaml = _build_nmstate_yaml(mac, ip, prefix_len, gateway, dns_list)
+                static_cfg.append({
+                    'network_yaml':      network_yaml,
+                    'mac_interface_map': [{'mac_address': mac, 'logical_nic_name': 'eth0'}],
+                })
+
+            if static_cfg:
+                infra_payload['static_network_config'] = static_cfg
+                log(f'Static IP config prepared for {len(static_cfg)} node(s) ✓')
+            else:
+                log('Static IP enabled but no node IPs provided — falling back to DHCP', 'warn')
+
         try:
             r = _ai('POST', '/infra-envs', token, infra_payload)
             infra_env_id   = r.json()['id']
@@ -713,12 +804,7 @@ def _run_deploy(job_id: str, cfg: dict):
 
         # ── Step 5: Create VMs ────────────────────────────────────────────────
         phase('Creating KVM virtual machines', 35)
-        vm_names = []
-        if is_sno:
-            vm_names = [f'{cluster_name}-sno']
-        else:
-            vm_names  = [f'{cluster_name}-master-{i}' for i in range(n_control)]
-            vm_names += [f'{cluster_name}-worker-{i}' for i in range(n_workers)]
+        vm_names = vm_names_pre  # already computed above for MAC generation
 
         vcpus_cp  = int(cfg.get('cp_vcpus',  8))
         ram_cp    = int(cfg.get('cp_ram_gb',  32)) * 1024
@@ -800,13 +886,15 @@ def _run_deploy(job_id: str, cfg: dict):
                     network     = net_name,
                     host_bridge = is_host_bridge,
                     extra_disks = extra_paths,
+                    mac_address = mac_map.get(vm_name),   # deterministic MAC
                 )
                 dom = conn.defineXML(xml)
                 dom.create()
                 created_vms.append(vm_name)
                 role = 'worker' if is_worker else ('SNO' if is_sno else 'control-plane')
                 extra_info = f' + {len(extra_paths)} extra disk(s)' if extra_paths else ''
-                log(f'VM {vm_name} started ({vcpus} vCPU, {ram_mb//1024} GB RAM, {disk_gb} GB{extra_info}, {role}) ✓')
+                mac_info   = f', MAC {mac_map[vm_name]}' if vm_name in mac_map else ''
+                log(f'VM {vm_name} started ({vcpus} vCPU, {ram_mb//1024} GB RAM, {disk_gb} GB{extra_info}, {role}{mac_info}) ✓')
 
         except Exception as e:
             conn.close()
