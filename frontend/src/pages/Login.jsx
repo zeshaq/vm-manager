@@ -8,6 +8,7 @@ export default function Login({ onLogin }) {
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
   const [showPass, setShowPass] = useState(false)
+  const [rememberMe, setRememberMe] = useState(false)
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
 
@@ -16,7 +17,7 @@ export default function Login({ onLogin }) {
     setError('')
     setLoading(true)
     try {
-      const res = await api.post('/login', { username, password })
+      const res = await api.post('/login', { username, password, remember_me: rememberMe })
       if (res.data.success) {
         await onLogin()
         navigate('/', { replace: true })
@@ -86,12 +87,25 @@ export default function Login({ onLogin }) {
               </div>
             </div>
 
+            <div className="flex items-center gap-2.5">
+              <input
+                id="remember"
+                type="checkbox"
+                checked={rememberMe}
+                onChange={e => setRememberMe(e.target.checked)}
+                className="w-4 h-4 rounded border border-navy-400 bg-navy-800 text-sky-500 focus:ring-sky-500 focus:ring-offset-navy-800 cursor-pointer"
+              />
+              <label htmlFor="remember" className="text-sm text-slate-400 cursor-pointer select-none">
+                Remember me for 30 days
+              </label>
+            </div>
+
             <button
               type="submit"
               disabled={loading}
-              className="w-full bg-sky-500 hover:bg-sky-400 disabled:opacity-50 disabled:cursor-not-allowed text-white font-semibold py-2.5 rounded-md transition-colors mt-2"
+              className="w-full bg-sky-500 hover:bg-sky-400 disabled:opacity-50 disabled:cursor-not-allowed text-white font-semibold py-2.5 rounded-md transition-colors"
             >
-              {loading ? 'Signing in...' : 'Sign In'}
+              {loading ? 'Signing in…' : 'Sign In'}
             </button>
           </form>
         </div>

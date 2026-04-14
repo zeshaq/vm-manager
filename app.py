@@ -3,6 +3,7 @@ import simplepam
 import os
 import psutil
 import libvirt
+from datetime import timedelta
 
 # Import the blueprints
 from views.listing import listing_bp
@@ -17,7 +18,8 @@ from views.api import api_bp
 from sockets import sock
 
 app = Flask(__name__, static_folder='frontend/dist/assets', static_url_path='/assets')
-app.secret_key = os.urandom(24)
+app.secret_key = os.environ.get('SECRET_KEY', 'vm-manager-default-secret-change-me')
+app.permanent_session_lifetime = timedelta(days=30)
 sock.init_app(app)
 
 # Register the blueprints

@@ -54,6 +54,7 @@ def login():
     password = data.get('password', '')
     if simplepam.authenticate(username, password):
         session['username'] = username
+        session.permanent = bool(data.get('remember_me'))
         return jsonify({'success': True})
     return jsonify({'success': False, 'error': 'Invalid credentials'})
 
