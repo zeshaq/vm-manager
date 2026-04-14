@@ -1,6 +1,6 @@
 import libvirt
 from flask import Blueprint, render_template, request, redirect, url_for
-from .listing import get_host_devices
+from .listing import get_host_devices, parse_pci_id
 
 creation_bp = Blueprint('creation', __name__)
 
@@ -26,12 +26,7 @@ def generate_vm_xml(name, memory_mb, vcpus, project=None, host_cpu=False, device
     devices_xml = ""
     if devices:
         for pci_id in devices:
-            parts = pci_id.split(':')
-            bus = f"0x{parts[1]}"
-            slot_func = parts[2].split('.')
-            slot = f"0x{slot_func[0]}"
-            function = f"0x{slot_func[1]}"
-            
+            bus, slot, function = parse_pci_id(pci_id)
             devices_xml += f"""
             <hostdev mode='subsystem' type='pci' managed='yes'>
               <source>

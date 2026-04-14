@@ -23,9 +23,15 @@ def get_vm_state_string(state_int):
     }
     return states.get(state_int, "Unknown")
 
-# --- HELPER: FIND HOST GPUS (COMPATIBLE MODE) ---
-# --- HELPER: FIND HOST GPUS (Aggressive Scan) ---
-# --- HELPER: FIND HOST GPUS (Universal Fix) ---
+def parse_pci_id(pci_id):
+    """Parse a PCI id string like '0000:8a:00.0' into hex bus/slot/function components."""
+    parts = pci_id.split(':')
+    bus = f"0x{parts[1]}"
+    slot_func = parts[2].split('.')
+    slot = f"0x{slot_func[0]}"
+    function = f"0x{slot_func[1]}"
+    return bus, slot, function
+
 def get_host_devices():
     """Scans host for all PCI devices using Libvirt NodeDevice API"""
     devices = []
@@ -329,13 +335,13 @@ def view_vm(uuid):
             # --- 4. Live IPs ---
             if info[0] == libvirt.VIR_DOMAIN_RUNNING:
                 try:
-                    live_dom = conn.lookupByUUIDString(uuid)
-                    ifaces_info = live_dom.interfaceAddresses(libvirt.VIR_DOMAIN_INTERFACE_ADDRESSES_SRC_LEASE, 0)
+                    ifaces_info = dom.interfaceAddresses(libvirt.VIR_DOMAIN_INTERFACE_ADDRESSES_SRC_LEASE, 0)
                     for _, val in ifaces_info.items():
                         for k_iface in interfaces:
                             if k_iface['mac'] == val.get('hwaddr'):
                                 k_iface['ips'] = [ip['addr'] for ip in val.get('addrs', [])]
-                except: pass
+                except libvirt.libvirtError:
+                    pass
 
             # --- 5. Build Boot Device List (for drag-and-drop) ---
             all_boot_options = []
@@ -390,7 +396,6 @@ def view_vm(uuid):
                 'available_devices': available_devices, 
                 'boot_devices': boot_devices,
                 'snapshots': snapshots,
-                'current_boot': current_boot # Keep for reference if needed elsewhere
             }
         except libvirt.libvirtError as e:
             return f"Error: {e}"
@@ -434,7 +439,6 @@ def add_disk(uuid):
                 raise Exception("No available disk device names left.")
             # --- END AUTO-DETERMINE ---
 
-            is_iso = file_path.lower().endswith('.iso')
             is_block_device = file_path.startswith('/dev/')
 
             if is_iso:
@@ -462,8 +466,6 @@ def add_disk(uuid):
                   <target dev='{target_dev}' bus='virtio'/>
                 </disk>
                 """
-            
-            print(f"DEBUG: Generated XML for disk attachment:\n{xml}")
             
             flags = libvirt.VIR_DOMAIN_AFFECT_CONFIG
             if dom.isActive(): flags |= libvirt.VIR_DOMAIN_AFFECT_LIVE
@@ -602,13 +604,8 @@ def attach_device(uuid):
     pci_id = request.form.get('pci_id') # Expects format "0000:8a:00.0"
     if not pci_id: return "No device selected"
     
-    # Parse the string back to hex components
-    parts = pci_id.split(':')
-    bus = f"0x{parts[1]}"
-    slot_func = parts[2].split('.')
-    slot = f"0x{slot_func[0]}"
-    function = f"0x{slot_func[1]}"
-    
+    bus, slot, function = parse_pci_id(pci_id)
+
     # Managed='yes' means Libvirt will detach from host driver automatically
     xml = f"""
     <hostdev mode='subsystem' type='pci' managed='yes'>
@@ -638,12 +635,8 @@ def detach_device(uuid):
     pci_id = request.form.get('pci_id')
     if not pci_id: return "No device selected"
 
-    parts = pci_id.split(':')
-    bus = f"0x{parts[1]}"
-    slot_func = parts[2].split('.')
-    slot = f"0x{slot_func[0]}"
-    function = f"0x{slot_func[1]}"
-    
+    bus, slot, function = parse_pci_id(pci_id)
+
     xml = f"""
     <hostdev mode='subsystem' type='pci' managed='yes'>
       <source>
@@ -651,7 +644,7 @@ def detach_device(uuid):
       </source>
     </hostdev>
     """
-    
+
     conn = get_db_connection()
     if conn:
         try:
@@ -716,7 +709,6 @@ def delete_vm(uuid):
     if conn:
         try:
             dom = conn.lookupByUUIDString(uuid)
-            vm_name = dom.name()
             if dom.isActive():
                 dom.destroy()
             dom.undefine()
@@ -737,8 +729,10 @@ def console_vm(uuid):
             tree = ET.fromstring(xml_str)
             graphics = tree.find("./devices/graphics[@type='vnc']")
             if graphics is not None: port = graphics.get('port')
-        except: pass
-        finally: conn.close()
+        except libvirt.libvirtError:
+            pass
+        finally:
+            conn.close()
     if not port or port == '-1': return "<h1>VM Not Running</h1><p>Start VM first.</p><a href='/list'>Back</a>"
     host_ip = request.host.split(':')[0]
     vv_content = f"[virt-viewer]\ntype=vnc\nhost={host_ip}\nport={port}\ndelete-this-file=1\ntitle=Console-{uuid}\n"
