@@ -12,6 +12,7 @@ import Storage from './pages/Storage'
 import Projects from './pages/Projects'
 import Dashboard from './pages/Dashboard'
 import Monitor from './pages/Monitor'
+import Docker from './pages/Docker'
 
 function PrivateRoute({ children, authState }) {
   if (authState === 'loading') {
@@ -58,6 +59,7 @@ export default function App() {
                 <Route path="/vms/:uuid/edit" element={<EditVM />} />
                 <Route path="/vms/:uuid/monitor" element={<Monitor />} />
                 <Route path="/storage" element={<Storage />} />
+                <Route path="/docker" element={<Docker />} />
                 <Route path="/projects" element={<Projects />} />
                 <Route path="/dashboard" element={<Dashboard />} />
                 <Route path="*" element={<Navigate to="/" replace />} />

@@ -13,6 +13,8 @@ from views.host_terminal import host_terminal_bp
 from views.dashboard import dashboard_bp
 from views.projects import projects_bp
 from views.api import api_bp, limiter
+from views.docker_mgmt import docker_bp
+from views.docker_exec import docker_exec_bp
 
 from sockets import sock
 
@@ -61,6 +63,8 @@ app.register_blueprint(host_terminal_bp)
 app.register_blueprint(dashboard_bp)
 app.register_blueprint(projects_bp)
 app.register_blueprint(api_bp)
+app.register_blueprint(docker_bp)
+app.register_blueprint(docker_exec_bp)
 
 @app.route('/login')
 @app.route('/logout')
@@ -119,7 +123,7 @@ def index():
 
 @app.route('/<path:path>')
 def serve_react(path):
-    if path.startswith('api/') or path in ('login', 'logout'):
+    if path.startswith('api/') or path.startswith('docker-exec') or path in ('login', 'logout', 'host-terminal'):
         return "Not found", 404
     build_dir = os.path.realpath(os.path.join(os.path.dirname(__file__), 'frontend', 'dist'))
     # Guard against path traversal
