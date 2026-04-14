@@ -1,0 +1,270 @@
+"""
+Host filesystem manager — browse, read, write, upload, download.
+All paths are resolved with os.path.realpath to prevent traversal.
+"""
+import os
+import stat
+import shutil
+import mimetypes
+from pathlib import Path
+from flask import Blueprint, jsonify, request, session, send_file
+from werkzeug.utils import secure_filename
+
+files_bp = Blueprint('files', __name__)
+
+MAX_READ_BYTES = 3 * 1024 * 1024   # 3 MB cap for inline text display
+
+TEXT_EXTENSIONS = {
+    '.py', '.js', '.jsx', '.ts', '.tsx', '.json', '.yaml', '.yml',
+    '.toml', '.ini', '.cfg', '.conf', '.sh', '.bash', '.zsh', '.fish',
+    '.env', '.md', '.txt', '.log', '.xml', '.html', '.htm', '.css',
+    '.csv', '.sql', '.rs', '.go', '.c', '.cpp', '.h', '.java', '.rb',
+    '.php', '.pl', '.r', '.tf', '.hcl', '.nix', '.dockerfile',
+    '.gitignore', '.gitattributes', '.editorconfig', '.htaccess',
+    '.service', '.timer', '.socket', '.target', '.mount',
+}
+
+
+def _auth():
+    if 'username' not in session:
+        return jsonify({'error': 'Unauthorized'}), 401
+    return None
+
+
+def _resolve(raw):
+    if not raw:
+        return '/'
+    return os.path.realpath(os.path.normpath(raw))
+
+
+def _is_text(path):
+    ext = os.path.splitext(path.lower())[1]
+    if ext in TEXT_EXTENSIONS:
+        return True
+    if os.path.basename(path).lower() in {
+        'dockerfile', 'makefile', 'rakefile', 'vagrantfile',
+        'readme', 'license', 'authors', 'changelog',
+    }:
+        return True
+    mime, _ = mimetypes.guess_type(path)
+    return bool(mime and mime.startswith('text/'))
+
+
+def _entry(path):
+    try:
+        st = os.lstat(path)
+    except OSError:
+        return None
+    mode    = st.st_mode
+    is_link = stat.S_ISLNK(mode)
+    is_dir  = stat.S_ISDIR(mode)
+    link_to = None
+    if is_link:
+        try:
+            link_to = os.readlink(path)
+        except OSError:
+            pass
+    return {
+        'name':     os.path.basename(path),
+        'path':     path,
+        'type':     'dir' if is_dir else ('link' if is_link else 'file'),
+        'size':     None if is_dir else st.st_size,
+        'modified': int(st.st_mtime),
+        'mode':     oct(stat.S_IMODE(mode)),
+        'link_to':  link_to,
+    }
+
+
+# ── List directory ────────────────────────────────────────────────────────────
+
+@files_bp.route('/api/files/list')
+def list_dir():
+    err = _auth()
+    if err:
+        return err
+    path = _resolve(request.args.get('path', '/'))
+    if not os.path.exists(path):
+        return jsonify({'error': 'Path not found'}), 404
+    if not os.path.isdir(path):
+        return jsonify({'error': 'Not a directory'}), 400
+    try:
+        entries = []
+        with os.scandir(path) as it:
+            for e in it:
+                info = _entry(e.path)
+                if info:
+                    entries.append(info)
+        entries.sort(key=lambda x: (0 if x['type'] == 'dir' else 1, x['name'].lower()))
+        parent = str(Path(path).parent) if path != '/' else None
+        return jsonify({'path': path, 'parent': parent, 'entries': entries})
+    except PermissionError:
+        return jsonify({'error': 'Permission denied'}), 403
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+# ── Read text file ────────────────────────────────────────────────────────────
+
+@files_bp.route('/api/files/read')
+def read_file():
+    err = _auth()
+    if err:
+        return err
+    path = _resolve(request.args.get('path', ''))
+    if not path:
+        return jsonify({'error': 'path required'}), 400
+    if not os.path.isfile(path):
+        return jsonify({'error': 'Not a file'}), 400
+    try:
+        size = os.path.getsize(path)
+        if not _is_text(path):
+            return jsonify({'error': 'Binary file', 'binary': True, 'size': size}), 422
+        if size > MAX_READ_BYTES:
+            return jsonify({'error': f'File too large ({size} bytes, max 3 MB)', 'size': size}), 413
+        with open(path, 'r', errors='replace') as f:
+            content = f.read()
+        return jsonify({'path': path, 'content': content, 'size': size})
+    except PermissionError:
+        return jsonify({'error': 'Permission denied'}), 403
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+# ── Write text file ───────────────────────────────────────────────────────────
+
+@files_bp.route('/api/files/write', methods=['POST'])
+def write_file():
+    err = _auth()
+    if err:
+        return err
+    data    = request.get_json() or {}
+    path    = _resolve(data.get('path', ''))
+    content = data.get('content', '')
+    if not path or path == '/':
+        return jsonify({'error': 'path required'}), 400
+    try:
+        with open(path, 'w') as f:
+            f.write(content)
+        return jsonify({'ok': True, 'path': path})
+    except PermissionError:
+        return jsonify({'error': 'Permission denied'}), 403
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+# ── Create directory ──────────────────────────────────────────────────────────
+
+@files_bp.route('/api/files/mkdir', methods=['POST'])
+def mkdir():
+    err = _auth()
+    if err:
+        return err
+    data = request.get_json() or {}
+    path = _resolve(data.get('path', ''))
+    if not path or path == '/':
+        return jsonify({'error': 'path required'}), 400
+    try:
+        os.makedirs(path, exist_ok=False)
+        return jsonify({'ok': True, 'path': path})
+    except FileExistsError:
+        return jsonify({'error': 'Already exists'}), 409
+    except PermissionError:
+        return jsonify({'error': 'Permission denied'}), 403
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+# ── Rename / move ─────────────────────────────────────────────────────────────
+
+@files_bp.route('/api/files/rename', methods=['POST'])
+def rename():
+    err = _auth()
+    if err:
+        return err
+    data = request.get_json() or {}
+    src  = _resolve(data.get('src', ''))
+    dst  = _resolve(data.get('dst', ''))
+    if not src or not dst:
+        return jsonify({'error': 'src and dst required'}), 400
+    if not os.path.exists(src):
+        return jsonify({'error': 'Source not found'}), 404
+    try:
+        os.rename(src, dst)
+        return jsonify({'ok': True, 'dst': dst})
+    except PermissionError:
+        return jsonify({'error': 'Permission denied'}), 403
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+# ── Delete ────────────────────────────────────────────────────────────────────
+
+@files_bp.route('/api/files/delete', methods=['POST'])
+def delete():
+    err = _auth()
+    if err:
+        return err
+    data = request.get_json() or {}
+    path = _resolve(data.get('path', ''))
+    if not path or path == '/':
+        return jsonify({'error': 'Invalid path'}), 400
+    if not os.path.lexists(path):
+        return jsonify({'error': 'Not found'}), 404
+    try:
+        if os.path.isdir(path) and not os.path.islink(path):
+            shutil.rmtree(path)
+        else:
+            os.remove(path)
+        return jsonify({'ok': True})
+    except PermissionError:
+        return jsonify({'error': 'Permission denied'}), 403
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+# ── Download ──────────────────────────────────────────────────────────────────
+
+@files_bp.route('/api/files/download')
+def download():
+    err = _auth()
+    if err:
+        return err
+    path = _resolve(request.args.get('path', ''))
+    if not path or not os.path.isfile(path):
+        return jsonify({'error': 'Not a file'}), 400
+    try:
+        return send_file(path, as_attachment=True,
+                         download_name=os.path.basename(path))
+    except PermissionError:
+        return jsonify({'error': 'Permission denied'}), 403
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+# ── Upload ────────────────────────────────────────────────────────────────────
+
+@files_bp.route('/api/files/upload', methods=['POST'])
+def upload():
+    err = _auth()
+    if err:
+        return err
+    dest_dir = _resolve(request.form.get('path', '/'))
+    if not os.path.isdir(dest_dir):
+        return jsonify({'error': 'Destination not a directory'}), 400
+    files = request.files.getlist('files')
+    if not files:
+        return jsonify({'error': 'No files provided'}), 400
+    saved = []
+    try:
+        for f in files:
+            name = secure_filename(f.filename)
+            if not name:
+                continue
+            dest = os.path.join(dest_dir, name)
+            f.save(dest)
+            saved.append(name)
+        return jsonify({'ok': True, 'saved': saved})
+    except PermissionError:
+        return jsonify({'error': 'Permission denied'}), 403
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500

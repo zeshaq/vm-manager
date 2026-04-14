@@ -10,7 +10,8 @@ import {
   LogOut,
   Cpu,
   Container,
-  Network
+  Network,
+  Files,
 } from 'lucide-react'
 
 
@@ -23,6 +24,7 @@ const navItems = [
   { to: '/storage', label: 'Storage', icon: HardDrive },
   { to: '/docker', label: 'Docker', icon: Container },
   { to: '/network', label: 'Network', icon: Network },
+  { to: '/files', label: 'File Manager', icon: Files },
   { to: '/projects', label: 'Projects', icon: FolderOpen },
 ]
 
@@ -61,6 +63,7 @@ export default function Layout({ children, username, onLogout }) {
     if (p === '/docker') return 'Docker'
     if (p === '/metrics') return 'Metrics'
     if (p === '/network') return 'Network'
+    if (p === '/files') return 'File Manager'
     if (p === '/projects') return 'Projects'
     return 'Hypercloud'
   }

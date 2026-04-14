@@ -15,6 +15,7 @@ import Monitor from './pages/Monitor'
 import Docker from './pages/Docker'
 import NetworkMgmt from './pages/NetworkMgmt'
 import Metrics from './pages/Metrics'
+import Files from './pages/Files'
 
 function PrivateRoute({ children, authState }) {
   if (authState === 'loading') {
@@ -64,6 +65,7 @@ export default function App() {
                 <Route path="/docker" element={<Docker />} />
                 <Route path="/network" element={<NetworkMgmt />} />
                 <Route path="/metrics" element={<Metrics />} />
+                <Route path="/files"   element={<Files />} />
                 <Route path="/projects" element={<Projects />} />
                 <Route path="/dashboard" element={<Dashboard />} />
                 <Route path="*" element={<Navigate to="/" replace />} />
