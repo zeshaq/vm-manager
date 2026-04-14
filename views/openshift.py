@@ -631,6 +631,21 @@ def _run_deploy(job_id: str, cfg: dict):
                 disk_gb = disk_w    if is_worker else disk_cp
 
                 disk_path = disk_dir / f'{vm_name}.qcow2'
+
+                # Clean up any leftover VM from a previous failed attempt
+                try:
+                    old = conn.lookupByName(vm_name)
+                    if old.isActive():
+                        old.destroy()   # force-off
+                    old.undefine()
+                    log(f'Removed existing VM {vm_name}')
+                except libvirt.libvirtError:
+                    pass  # didn't exist — that's fine
+
+                # Remove stale disk if present
+                if disk_path.exists():
+                    disk_path.unlink()
+
                 # Create qcow2 disk
                 r = subprocess.run(
                     ['qemu-img', 'create', '-f', 'qcow2', str(disk_path), f'{disk_gb}G'],

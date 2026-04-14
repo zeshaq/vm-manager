@@ -641,7 +641,7 @@ function StepReview({ form, onDeploy, onBack, deploying }) {
 
 // ── Step 6: Progress ──────────────────────────────────────────────────────────
 
-function StepProgress({ jobId }) {
+function StepProgress({ jobId, onRetry }) {
   const [job, setJob]       = useState(null)
   const [copied, setCopied] = useState('')
   const logRef              = useRef(null)
@@ -698,8 +698,14 @@ function StepProgress({ jobId }) {
                           'Deployment in progress — this may take 45–90 minutes.'}
           </div>
         </div>
-        <div className="text-right">
+        <div className="text-right flex flex-col items-end gap-2">
           <div className="text-3xl font-bold text-sky-400">{job?.progress ?? 0}%</div>
+          {isFailed && onRetry && (
+            <button onClick={onRetry}
+              className="flex items-center gap-1.5 bg-sky-600 hover:bg-sky-500 text-white text-xs font-semibold px-3 py-1.5 rounded-md transition-colors">
+              <RefreshCw size={12} /> Retry
+            </button>
+          )}
         </div>
       </div>
 
@@ -956,7 +962,7 @@ export default function OpenShiftPage() {
         {step === 3 && <StepNodes     {...stepProps} onBack={() => setStep(2)} onNext={() => setStep(4)} />}
         {step === 4 && <StepNetwork   {...stepProps} onBack={() => setStep(3)} onNext={() => setStep(5)} />}
         {step === 5 && <StepReview    form={form} onBack={() => setStep(4)} onDeploy={deploy} deploying={deploying} />}
-        {step === 6 && jobId && <StepProgress jobId={jobId} />}
+        {step === 6 && jobId && <StepProgress jobId={jobId} onRetry={() => { setStep(5) }} />}
       </div>
 
       {/* Past deployments (shown on step 0 only) */}
