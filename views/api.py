@@ -1,22 +1,31 @@
 import libvirt
 import xml.etree.ElementTree as ET
 import os
+import re
 import subprocess
 import time
 import datetime
 import psutil
+import uuid as uuid_module
 
-from flask import Blueprint, request, jsonify, session
+from flask import Blueprint, request, jsonify, session, current_app
 from werkzeug.utils import secure_filename
+from flask_limiter import Limiter
+from flask_limiter.util import get_remote_address
 
 from .listing import get_db_connection, get_vm_state_string, get_host_devices, parse_pci_id
 from . import project_utils
 from .creation import generate_vm_xml
 
 api_bp = Blueprint('api', __name__, url_prefix='/api')
+limiter = Limiter(key_func=get_remote_address)
 
 STORAGE_PATH = '/var/lib/libvirt/images'
 ALLOWED_EXTENSIONS = {'iso', 'img', 'qcow2'}
+ALLOWED_DISK_FORMATS = {'qcow2', 'raw'}
+VM_NAME_RE = re.compile(r'^[a-zA-Z0-9][a-zA-Z0-9._-]{0,62}$')
+PCI_ID_RE  = re.compile(r'^[0-9a-fA-F]{4}:[0-9a-fA-F]{2}:[0-9a-fA-F]{2}\.[0-9a-fA-F]$')
+MAC_RE     = re.compile(r'^([0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}$')
 
 
 # ---------------------------------------------------------------------------
@@ -28,6 +37,14 @@ def require_auth():
     if 'username' not in session:
         return jsonify({'error': 'Unauthorized'}), 401
     return None
+
+
+def validate_uuid(uuid_str):
+    try:
+        uuid_module.UUID(uuid_str)
+        return True
+    except (ValueError, AttributeError):
+        return False
 
 
 def allowed_file(filename):
@@ -47,15 +64,21 @@ def get_human_readable_size(size_in_bytes):
 # ---------------------------------------------------------------------------
 
 @api_bp.route('/login', methods=['POST'])
+@limiter.limit("10 per minute; 30 per hour")
 def login():
     import simplepam
     data = request.get_json() or {}
-    username = data.get('username', '')
-    password = data.get('password', '')
+    username = str(data.get('username', ''))[:64]
+    password = str(data.get('password', ''))[:256]
+    if not username or not password:
+        return jsonify({'success': False, 'error': 'Invalid credentials'})
     if simplepam.authenticate(username, password):
+        session.clear()          # prevent session fixation
         session['username'] = username
         session.permanent = bool(data.get('remember_me'))
+        current_app.logger.info(f"Login: {username} from {request.remote_addr}")
         return jsonify({'success': True})
+    current_app.logger.warning(f"Failed login for '{username}' from {request.remote_addr}")
     return jsonify({'success': False, 'error': 'Invalid credentials'})
 
 
@@ -185,7 +208,7 @@ def create_vm():
         return err
 
     data = request.get_json() or {}
-    name = data.get('name')
+    name = str(data.get('name', '')).strip()
     ram = data.get('ram')
     cpu = data.get('cpu')
     project = data.get('project')
@@ -194,6 +217,17 @@ def create_vm():
 
     if not name or not ram or not cpu:
         return jsonify({'error': 'Missing required fields: name, ram, cpu'}), 400
+    if not VM_NAME_RE.match(name):
+        return jsonify({'error': 'Invalid VM name (alphanumeric, dots, dashes, underscores only)'}), 400
+    try:
+        ram = int(ram)
+        cpu = int(cpu)
+        if ram < 64 or ram > 1048576:
+            return jsonify({'error': 'RAM must be between 64 MB and 1 TB'}), 400
+        if cpu < 1 or cpu > 256:
+            return jsonify({'error': 'CPU count must be between 1 and 256'}), 400
+    except (ValueError, TypeError):
+        return jsonify({'error': 'ram and cpu must be integers'}), 400
 
     try:
         xml_config = generate_vm_xml(name, ram, cpu, project, host_cpu, devices)
@@ -203,9 +237,13 @@ def create_vm():
         dom = conn.defineXML(xml_config)
         new_uuid = dom.UUIDString()
         conn.close()
+        current_app.logger.info(f"VM created: {name} by {session.get('username')}")
         return jsonify({'uuid': new_uuid}), 201
-    except Exception as e:
+    except libvirt.libvirtError as e:
         return jsonify({'error': str(e)}), 500
+    except Exception:
+        current_app.logger.exception("Unexpected error creating VM")
+        return jsonify({'error': 'Failed to create VM'}), 500
 
 
 @api_bp.route('/vms/<uuid>', methods=['GET'])
@@ -539,25 +577,24 @@ def add_disk(uuid):
 
         is_block_device = file_path.startswith('/dev/')
 
+        # Build XML safely with ElementTree (prevents XML injection)
         if is_iso:
-            xml = f"""<disk type='file' device='cdrom'>
-  <driver name='qemu' type='raw'/>
-  <source file='{file_path}'/>
-  <target dev='{target_dev}' bus='sata'/>
-  <readonly/>
-</disk>"""
+            disk_el = ET.Element('disk', type='file', device='cdrom')
+            ET.SubElement(disk_el, 'driver', name='qemu', type='raw')
+            ET.SubElement(disk_el, 'source', file=file_path)
+            ET.SubElement(disk_el, 'target', dev=target_dev, bus='sata')
+            ET.SubElement(disk_el, 'readonly')
         elif is_block_device:
-            xml = f"""<disk type='block' device='disk'>
-  <driver name='qemu' type='raw' cache='none' io='native'/>
-  <source dev='{file_path}'/>
-  <target dev='{target_dev}' bus='virtio'/>
-</disk>"""
+            disk_el = ET.Element('disk', type='block', device='disk')
+            ET.SubElement(disk_el, 'driver', name='qemu', type='raw', cache='none', io='native')
+            ET.SubElement(disk_el, 'source', dev=file_path)
+            ET.SubElement(disk_el, 'target', dev=target_dev, bus='virtio')
         else:
-            xml = f"""<disk type='file' device='disk'>
-  <driver name='qemu' type='qcow2'/>
-  <source file='{file_path}'/>
-  <target dev='{target_dev}' bus='virtio'/>
-</disk>"""
+            disk_el = ET.Element('disk', type='file', device='disk')
+            ET.SubElement(disk_el, 'driver', name='qemu', type='qcow2')
+            ET.SubElement(disk_el, 'source', file=file_path)
+            ET.SubElement(disk_el, 'target', dev=target_dev, bus='virtio')
+        xml = ET.tostring(disk_el).decode()
 
         flags = libvirt.VIR_DOMAIN_AFFECT_CONFIG
         if dom.isActive():
@@ -688,12 +725,20 @@ def add_interface(uuid):
     if not conn:
         return jsonify({'error': 'Could not connect to hypervisor'}), 500
 
+    if not source:
+        return jsonify({'error': 'source is required'}), 400
+
     try:
         dom = conn.lookupByUUIDString(uuid)
+        # Build XML safely with ElementTree (prevents XML injection)
         if mode == 'bridge':
-            xml = f"<interface type='bridge'><source bridge='{source}'/><model type='virtio'/></interface>"
+            iface_el = ET.Element('interface', type='bridge')
+            ET.SubElement(iface_el, 'source', bridge=source)
         else:
-            xml = f"<interface type='network'><source network='{source}'/><model type='virtio'/></interface>"
+            iface_el = ET.Element('interface', type='network')
+            ET.SubElement(iface_el, 'source', network=source)
+        ET.SubElement(iface_el, 'model', type='virtio')
+        xml = ET.tostring(iface_el).decode()
         flags = libvirt.VIR_DOMAIN_AFFECT_CONFIG
         if dom.isActive():
             flags |= libvirt.VIR_DOMAIN_AFFECT_LIVE
@@ -713,9 +758,9 @@ def delete_interface(uuid):
         return err
 
     data = request.get_json() or {}
-    mac = data.get('mac')
-    if not mac:
-        return jsonify({'error': 'mac is required'}), 400
+    mac = data.get('mac', '')
+    if not mac or not MAC_RE.match(mac):
+        return jsonify({'error': 'Valid MAC address is required'}), 400
 
     conn = get_db_connection()
     if not conn:
@@ -755,16 +800,21 @@ def attach_device(uuid):
         return err
 
     data = request.get_json() or {}
-    pci_id = data.get('pci_id')
-    if not pci_id:
-        return jsonify({'error': 'pci_id is required'}), 400
+    pci_id = data.get('pci_id', '')
+    if not pci_id or not PCI_ID_RE.match(pci_id):
+        return jsonify({'error': 'Invalid PCI ID format'}), 400
+
+    # Validate against known host devices to prevent arbitrary PCI manipulation
+    available = {d['pci_id'] for d in get_host_devices()}
+    if pci_id not in available:
+        return jsonify({'error': 'Device not found on host'}), 400
 
     bus, slot, function = parse_pci_id(pci_id)
-    xml = f"""<hostdev mode='subsystem' type='pci' managed='yes'>
-  <source>
-    <address domain='0x0000' bus='{bus}' slot='{slot}' function='{function}'/>
-  </source>
-</hostdev>"""
+    # Build XML safely with ElementTree
+    hostdev_el = ET.Element('hostdev', mode='subsystem', type='pci', managed='yes')
+    src = ET.SubElement(hostdev_el, 'source')
+    ET.SubElement(src, 'address', domain='0x0000', bus=bus, slot=slot, function=function)
+    xml = ET.tostring(hostdev_el).decode()
 
     conn = get_db_connection()
     if not conn:
@@ -841,7 +891,10 @@ def create_snapshot(uuid):
 
     try:
         dom = conn.lookupByUUIDString(uuid)
-        xml = f"<domainsnapshot><name>{snapshot_name}</name></domainsnapshot>"
+        # Build XML safely with ElementTree (prevents XML injection)
+        snap_el = ET.Element('domainsnapshot')
+        ET.SubElement(snap_el, 'name').text = snapshot_name
+        xml = ET.tostring(snap_el).decode()
         dom.snapshotCreateXML(xml, 0)
         return jsonify({'success': True})
 
@@ -1013,14 +1066,23 @@ def create_disk():
         return err
 
     data = request.get_json() or {}
-    name = data.get('name')
-    size_gb = data.get('size')
-    fmt = data.get('format', 'qcow2')
+    name = str(data.get('name', '')).strip()
+    fmt = str(data.get('format', 'qcow2')).strip()
 
-    if not name or not size_gb:
-        return jsonify({'error': 'name and size are required'}), 400
+    if not name:
+        return jsonify({'error': 'name is required'}), 400
+    if fmt not in ALLOWED_DISK_FORMATS:
+        return jsonify({'error': f'format must be one of: {", ".join(ALLOWED_DISK_FORMATS)}'}), 400
+    try:
+        size_gb = int(data.get('size', 0))
+        if size_gb < 1 or size_gb > 10000:
+            return jsonify({'error': 'size must be between 1 and 10000 GB'}), 400
+    except (ValueError, TypeError):
+        return jsonify({'error': 'size must be a number'}), 400
 
-    safe_name = secure_filename(name)
+    safe_name = secure_filename(os.path.basename(name))
+    if not safe_name:
+        return jsonify({'error': 'Invalid disk name'}), 400
     if not safe_name.endswith(f'.{fmt}'):
         safe_name += f'.{fmt}'
 
@@ -1029,10 +1091,12 @@ def create_disk():
         return jsonify({'error': 'File already exists'}), 409
 
     try:
-        subprocess.run(['qemu-img', 'create', '-f', fmt, full_path, f'{size_gb}G'], check=True)
+        subprocess.run(['qemu-img', 'create', '-f', fmt, full_path, f'{size_gb}G'],
+                       check=True, capture_output=True)
         return jsonify({'success': True})
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
+    except subprocess.CalledProcessError as e:
+        current_app.logger.error(f"qemu-img failed: {e.stderr}")
+        return jsonify({'error': 'Failed to create disk image'}), 500
 
 
 @api_bp.route('/storage/upload', methods=['POST'])

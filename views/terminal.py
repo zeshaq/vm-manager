@@ -2,7 +2,7 @@ import libvirt
 import xml.etree.ElementTree as ET
 import socket
 from threading import Thread
-from flask import Blueprint, render_template, request
+from flask import Blueprint, render_template, request, session
 from flask_sock import ConnectionClosed
 
 # Import the sock object from the main app
@@ -38,6 +38,10 @@ def terminal():
 
 @sock.route('/vnc')
 def vnc(ws):
+    if 'username' not in session:
+        ws.close(reason=1008, message="Unauthorized")
+        return
+
     vm_name = request.args.get('vm_name')
     if not vm_name:
         ws.close(reason=1008, message="Missing vm_name parameter")

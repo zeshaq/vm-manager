@@ -3,7 +3,7 @@ import pty
 import select
 import subprocess
 from threading import Thread
-from flask import Blueprint, render_template
+from flask import Blueprint, render_template, session, current_app
 from flask_sock import ConnectionClosed
 from sockets import sock
 
@@ -15,6 +15,12 @@ def terminal():
 
 @sock.route('/host-ws')
 def host_ws(ws):
+    # Auth check — host terminal gives full shell access
+    if 'username' not in session:
+        ws.close(reason=1008, message="Unauthorized")
+        return
+    current_app.logger.info(f"Host terminal opened by {session['username']}")
+
     # Create a new process with a pseudo-terminal
     pid, fd = pty.fork()
 

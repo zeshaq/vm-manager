@@ -9,3 +9,4 @@ gunicorn
 gevent
 hypercorn
 psutil
+flask-limiter

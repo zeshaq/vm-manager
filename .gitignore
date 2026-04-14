@@ -2,3 +2,4 @@ projects.xml
 __pycache__/
 *.pyc
 frontend/node_modules/
+.secret_key
