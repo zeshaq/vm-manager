@@ -4,7 +4,7 @@ import {
   Boxes, ChevronRight, ChevronLeft, CheckCircle, XCircle,
   AlertTriangle, Loader2, RefreshCw, Download, Server,
   Cpu, MemoryStick, HardDrive, Network, Key, Lock,
-  Shield, Terminal, ExternalLink, Copy, Check, Save, Trash2, ArrowLeft
+  Shield, Terminal, ExternalLink, Copy, Check, Save, Trash2, ArrowLeft, Plus
 } from 'lucide-react'
 import api from '../api'
 
@@ -454,10 +454,66 @@ function StepNodes({ form, set, onNext, onBack }) {
         </>
       )}
 
+      {/* Storage path */}
       <Field label="VM Disk Storage Path" hint="Where to create qcow2 disks on this host">
         <input value={form.storage_path} onChange={e => set('storage_path', e.target.value)}
           className={inputCls} />
       </Field>
+
+      {/* Extra disks */}
+      <div className="space-y-2">
+        <div className="flex items-center justify-between">
+          <label className={labelCls + ' mb-0'}>
+            Extra Disks
+            <span className="text-slate-600 font-normal ml-1">(optional — attached as vdb, vdc, …)</span>
+          </label>
+          <button type="button"
+            onClick={() => set('extra_disks', [...form.extra_disks, { size_gb: 100 }])}
+            className="flex items-center gap-1 text-xs text-sky-400 hover:text-sky-300 transition-colors">
+            <Plus size={13} /> Add disk
+          </button>
+        </div>
+
+        {form.extra_disks.length === 0 && (
+          <p className="text-slate-600 text-xs">No extra disks — each VM gets one primary disk (vda).</p>
+        )}
+
+        {form.extra_disks.map((d, idx) => (
+          <div key={idx} className="flex items-center gap-2">
+            <span className="text-slate-500 text-xs font-mono w-8 flex-shrink-0">
+              vd{String.fromCharCode(98 + idx)}
+            </span>
+            <input
+              type="number"
+              value={d.size_gb}
+              min={10}
+              onChange={e => {
+                const next = [...form.extra_disks]
+                next[idx] = { size_gb: e.target.value }
+                set('extra_disks', next)
+              }}
+              className={inputCls + ' w-28'}
+            />
+            <span className="text-slate-500 text-xs">GB</span>
+            <button type="button"
+              onClick={() => set('extra_disks', form.extra_disks.filter((_, i) => i !== idx))}
+              className="text-slate-500 hover:text-red-400 transition-colors ml-1">
+              <Trash2 size={14} />
+            </button>
+          </div>
+        ))}
+
+        {form.extra_disks.length > 0 && (
+          <p className="text-slate-600 text-xs">
+            Same extra disks attached to every node. Total per node:{' '}
+            <span className="text-slate-400">
+              {1 + form.extra_disks.length} disks
+              ({[isSNO ? form.cp_disk_gb : (form.cp_disk_gb || form.w_disk_gb),
+                 ...form.extra_disks.map(d => d.size_gb)].reduce((a, b) => Number(a) + Number(b), 0)} GB)
+            </span>
+          </p>
+        )}
+      </div>
 
       <NavButtons onBack={onBack} onNext={onNext} />
     </div>
@@ -966,6 +1022,7 @@ const DEFAULTS = {
   worker_count:         2,
   // Storage
   storage_path:         '/var/lib/libvirt/images',
+  extra_disks:          [],   // [{size_gb}]
   // Network
   libvirt_network:      'default',
   machine_cidr:         '192.168.122.0/24',

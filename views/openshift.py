@@ -532,7 +532,7 @@ def _reboot_vms(vm_names: list, log_fn):
 
 def _vm_xml(name: str, vcpus: int, ram_mb: int, disk_path: str,
              iso_path: str, network: str = 'default',
-             host_bridge: bool = False) -> str:
+             host_bridge: bool = False, extra_disks: list = None) -> str:
     # libvirt-managed network vs host bridge (e.g. br-real) need different XML
     if host_bridge:
         iface_xml = f"""<interface type='bridge'>
@@ -544,6 +544,17 @@ def _vm_xml(name: str, vcpus: int, ram_mb: int, disk_path: str,
       <source network='{network}'/>
       <model type='virtio'/>
     </interface>"""
+
+    # Build extra disk XML (vdb, vdc, …)
+    extra_disks_xml = ''
+    for idx, ep in enumerate(extra_disks or []):
+        dev = 'vd' + chr(ord('b') + idx)   # vdb, vdc, vdd …
+        extra_disks_xml += f"""
+    <disk type='file' device='disk'>
+      <driver name='qemu' type='qcow2' cache='none'/>
+      <source file='{ep}'/>
+      <target dev='{dev}' bus='virtio'/>
+    </disk>"""
 
     return f"""
 <domain type='kvm'>
@@ -570,7 +581,7 @@ def _vm_xml(name: str, vcpus: int, ram_mb: int, disk_path: str,
       <source file='{disk_path}'/>
       <target dev='vda' bus='virtio'/>
       <boot order='2'/>
-    </disk>
+    </disk>{extra_disks_xml}
     {iface_xml}
     <graphics type='vnc' port='-1' autoport='yes' listen='127.0.0.1'>
       <listen type='address' address='127.0.0.1'/>
@@ -716,6 +727,9 @@ def _run_deploy(job_id: str, cfg: dict):
         ram_w     = int(cfg.get('w_ram_gb',   16)) * 1024
         disk_w    = int(cfg.get('w_disk_gb',  100))
 
+        # Extra disks: [{size_gb: N}, …] — same list applied to every VM
+        extra_disk_specs = cfg.get('extra_disks', [])   # list of {size_gb}
+
         try:
             conn = libvirt.open('qemu:///system')
         except Exception as e:
@@ -724,6 +738,23 @@ def _run_deploy(job_id: str, cfg: dict):
 
         disk_dir = Path(cfg.get('storage_path', '/var/lib/libvirt/images'))
         created_vms = []
+
+        def _make_disk(path: Path, size_gb: int) -> bool:
+            """Create a qcow2 at path, chmod it. Returns True on success."""
+            if path.exists():
+                path.unlink()
+            r = subprocess.run(
+                ['qemu-img', 'create', '-f', 'qcow2', str(path), f'{size_gb}G'],
+                capture_output=True, text=True,
+            )
+            if r.returncode != 0:
+                fail(f'qemu-img failed ({path.name}): {r.stderr}')
+                return False
+            try:
+                os.chmod(path, 0o644)
+            except Exception:
+                pass
+            return True
 
         try:
             for i, vm_name in enumerate(vm_names):
@@ -738,47 +769,44 @@ def _run_deploy(job_id: str, cfg: dict):
                 try:
                     old = conn.lookupByName(vm_name)
                     if old.isActive():
-                        old.destroy()   # force-off
+                        old.destroy()
                     old.undefine()
                     log(f'Removed existing VM {vm_name}')
                 except libvirt.libvirtError:
-                    pass  # didn't exist — that's fine
-
-                # Remove stale disk if present
-                if disk_path.exists():
-                    disk_path.unlink()
-
-                # Create qcow2 disk
-                r = subprocess.run(
-                    ['qemu-img', 'create', '-f', 'qcow2', str(disk_path), f'{disk_gb}G'],
-                    capture_output=True, text=True,
-                )
-                if r.returncode != 0:
-                    fail(f'qemu-img failed for {vm_name}: {r.stderr}')
-                    return
-                # Ensure qemu (libvirt-qemu) can read the disk image
-                try:
-                    os.chmod(disk_path, 0o644)
-                except Exception:
                     pass
 
+                # Create primary disk
+                if not _make_disk(disk_path, disk_gb):
+                    return
+
+                # Create extra disks (vdb, vdc, …)
+                extra_paths = []
+                for ei, espec in enumerate(extra_disk_specs):
+                    esize = int(espec.get('size_gb', 100))
+                    epath = disk_dir / f'{vm_name}-extra{ei+1}.qcow2'
+                    if not _make_disk(epath, esize):
+                        return
+                    extra_paths.append(str(epath))
+                    log(f'  Extra disk {ei+1}: {epath.name} ({esize} GB)')
+
                 net_name = cfg.get('libvirt_network', 'default')
-                # Detect host bridges (br-real etc) — need type='bridge' XML
                 is_host_bridge = os.path.isdir(f'/sys/class/net/{net_name}/bridge')
                 xml = _vm_xml(
-                    name      = vm_name,
-                    vcpus     = vcpus,
-                    ram_mb    = ram_mb,
-                    disk_path = str(disk_path),
-                    iso_path  = str(iso_path),
-                    network   = net_name,
+                    name        = vm_name,
+                    vcpus       = vcpus,
+                    ram_mb      = ram_mb,
+                    disk_path   = str(disk_path),
+                    iso_path    = str(iso_path),
+                    network     = net_name,
                     host_bridge = is_host_bridge,
+                    extra_disks = extra_paths,
                 )
                 dom = conn.defineXML(xml)
                 dom.create()
                 created_vms.append(vm_name)
                 role = 'worker' if is_worker else ('SNO' if is_sno else 'control-plane')
-                log(f'VM {vm_name} started ({vcpus} vCPU, {ram_mb//1024} GB RAM, {disk_gb} GB disk, {role}) ✓')
+                extra_info = f' + {len(extra_paths)} extra disk(s)' if extra_paths else ''
+                log(f'VM {vm_name} started ({vcpus} vCPU, {ram_mb//1024} GB RAM, {disk_gb} GB{extra_info}, {role}) ✓')
 
         except Exception as e:
             conn.close()
