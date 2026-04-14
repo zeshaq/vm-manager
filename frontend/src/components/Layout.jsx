@@ -9,7 +9,8 @@ import {
   Terminal,
   LogOut,
   Cpu,
-  Container
+  Container,
+  Network
 } from 'lucide-react'
 
 const navItems = [
@@ -19,6 +20,7 @@ const navItems = [
   { to: '/vms/create', label: 'Create VM', icon: PlusCircle },
   { to: '/storage', label: 'Storage', icon: HardDrive },
   { to: '/docker', label: 'Docker', icon: Container },
+  { to: '/network', label: 'Network', icon: Network },
   { to: '/projects', label: 'Projects', icon: FolderOpen },
 ]
 
@@ -55,6 +57,7 @@ export default function Layout({ children, username, onLogout }) {
     if (p.startsWith('/vms/')) return 'VM Detail'
     if (p === '/storage') return 'Storage'
     if (p === '/docker') return 'Docker'
+    if (p === '/network') return 'Network'
     if (p === '/projects') return 'Projects'
     return 'VM Manager'
   }

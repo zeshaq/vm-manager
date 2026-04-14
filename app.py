@@ -15,6 +15,7 @@ from views.projects import projects_bp
 from views.api import api_bp, limiter
 from views.docker_mgmt import docker_bp
 from views.docker_exec import docker_exec_bp
+from views.network_mgmt import network_bp
 
 from sockets import sock
 
@@ -65,6 +66,7 @@ app.register_blueprint(projects_bp)
 app.register_blueprint(api_bp)
 app.register_blueprint(docker_bp)
 app.register_blueprint(docker_exec_bp)
+app.register_blueprint(network_bp)
 
 @app.route('/login')
 @app.route('/logout')

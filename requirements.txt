@@ -11,3 +11,4 @@ hypercorn
 psutil
 flask-limiter
 docker
+pyyaml
