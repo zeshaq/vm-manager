@@ -306,9 +306,7 @@ export default function Files() {
     form.append('path', cwd)
     files.forEach(f => form.append('files', f))
     try {
-      const r = await api.post('/files/upload', form, {
-        headers: { 'Content-Type': 'multipart/form-data' }
-      })
+      const r = await api.post('/files/upload', form)
       notify(`Uploaded ${r.data.saved.join(', ')}`)
       loadDir(cwd)
     } catch (e) {
