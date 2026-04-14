@@ -760,14 +760,18 @@ def _run_deploy(job_id: str, cfg: dict):
             'installed':                  100,
         }
 
+        consecutive_errors = 0
+
         while time.time() < deadline:
             try:
                 token = _get_access_token(cfg['offline_token'])
                 r = _ai('GET', f'/clusters/{cluster_id}', token)
                 cluster_data = r.json()
-                status     = cluster_data.get('status', '')
+                status      = cluster_data.get('status', '')
                 status_info = cluster_data.get('status_info', '')
                 install_pct = cluster_data.get('progress', {}).get('total_percentage', 0)
+
+                consecutive_errors = 0  # reset on success
 
                 if status != last_status or install_pct != last_pct:
                     log(f'  Status: {status} ({install_pct}%) — {status_info}')
@@ -783,7 +787,16 @@ def _run_deploy(job_id: str, cfg: dict):
                     return
 
             except Exception as e:
-                log(f'  Monitoring error (retrying): {e}', 'warn')
+                consecutive_errors += 1
+                # Exponential backoff: log less frequently during repeated failures
+                # Always log first error; then only every 5th; max backoff 5 min
+                if consecutive_errors == 1:
+                    log(f'  Monitoring error (retrying): {e}', 'warn')
+                elif consecutive_errors % 5 == 0:
+                    log(f'  Still unreachable after {consecutive_errors} attempts — installation continues on VMs', 'warn')
+                wait = min(30 * (2 ** min(consecutive_errors - 1, 4)), 300)
+                time.sleep(wait)
+                continue
 
             time.sleep(30)
         else:
