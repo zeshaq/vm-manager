@@ -13,6 +13,7 @@ import {
   Network
 } from 'lucide-react'
 
+
 const navItems = [
   { to: '/', label: 'Host Info', icon: Cpu, exact: true },
   { to: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
@@ -70,8 +71,8 @@ export default function Layout({ children, username, onLogout }) {
       <aside className="w-64 bg-navy-800 border-r border-navy-400 flex flex-col flex-shrink-0">
         {/* Logo */}
         <div className="px-6 py-5 border-b border-navy-400">
-          <div className="flex items-center gap-2">
-            <Server size={22} className="text-sky-400" />
+          <div className="flex items-center gap-3">
+            <img src="/logo.svg" alt="Hypercloud" className="w-8 h-8" />
             <span className="text-sky-400 font-bold text-lg tracking-tight">Hypercloud</span>
           </div>
         </div>

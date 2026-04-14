@@ -38,8 +38,8 @@ export default function Login({ onLogin }) {
         <div className="bg-navy-700 border border-navy-400 rounded-xl shadow-2xl p-8">
           {/* Logo */}
           <div className="flex flex-col items-center mb-8">
-            <div className="w-14 h-14 rounded-xl flex items-center justify-center mb-4 overflow-hidden">
-              <img src="/favicon.svg" alt="Hypercloud" className="w-14 h-14" />
+            <div className="mb-4">
+              <img src="/logo.svg" alt="Hypercloud" className="w-20 h-20 drop-shadow-lg" />
             </div>
             <h1 className="text-2xl font-bold text-sky-400">Hypercloud</h1>
             <p className="text-slate-400 text-sm mt-1">Sign in to your cloud dashboard</p>
