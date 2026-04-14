@@ -426,6 +426,74 @@ def delete_job(job_id):
     return jsonify({'ok': True})
 
 
+# ── CDROM eject helper ───────────────────────────────────────────────────────
+
+def _eject_cdroms(vm_names: list, log_fn):
+    """Eject the discovery ISO from all VMs so the next reboot boots from disk.
+
+    Called right after installation is triggered — the ISO is no longer needed
+    and leaving it as boot-order-1 causes the Assisted Installer 'pending user
+    action: expected to boot from disk' error.
+    """
+    try:
+        conn = libvirt.open('qemu:///system')
+    except Exception as e:
+        log_fn(f'  Cannot open libvirt for CDROM eject: {e}', 'warn')
+        return
+
+    for vm_name in vm_names:
+        try:
+            dom = conn.lookupByName(vm_name)
+            xml_str = dom.XMLDesc(0)
+            root    = ET.fromstring(xml_str)
+            for disk in root.findall('.//disk'):
+                if disk.get('device') != 'cdrom':
+                    continue
+                target_el = disk.find('target')
+                if target_el is None:
+                    continue
+                dev = target_el.get('dev', 'sda')
+                bus = target_el.get('bus', 'sata')
+                # Empty CDROM (no <source>) = ejected; also clear boot order
+                empty_xml = (
+                    f"<disk type='file' device='cdrom'>"
+                    f"<driver name='qemu' type='raw'/>"
+                    f"<target dev='{dev}' bus='{bus}'/>"
+                    f"<readonly/>"
+                    f"</disk>"
+                )
+                try:
+                    dom.updateDeviceFlags(
+                        empty_xml,
+                        libvirt.VIR_DOMAIN_AFFECT_LIVE |
+                        libvirt.VIR_DOMAIN_AFFECT_CONFIG,
+                    )
+                    log_fn(f'  Ejected ISO from {vm_name} ({dev}) ✓')
+                except libvirt.libvirtError as e:
+                    log_fn(f'  CDROM eject warning ({vm_name}): {e}', 'warn')
+        except libvirt.libvirtError:
+            pass  # VM not found — skip
+
+    conn.close()
+
+
+def _reboot_vms(vm_names: list, log_fn):
+    """Soft-reboot VMs (used to recover from pending-user-action)."""
+    try:
+        conn = libvirt.open('qemu:///system')
+    except Exception:
+        return
+    for vm_name in vm_names:
+        try:
+            dom = conn.lookupByName(vm_name)
+            if dom.isActive():
+                dom.reboot(0)
+                log_fn(f'  Rebooted {vm_name} ✓')
+        except libvirt.libvirtError as e:
+            log_fn(f'  Reboot warning ({vm_name}): {e}', 'warn')
+    conn.close()
+
+
 # ── VM XML generation ─────────────────────────────────────────────────────────
 
 def _vm_xml(name: str, vcpus: int, ram_mb: int, disk_path: str,
@@ -745,12 +813,20 @@ def _run_deploy(job_id: str, cfg: dict):
             fail(f'Failed to trigger installation: {e}')
             return
 
+        # Eject discovery ISO from all VMs immediately after install starts.
+        # Without this, the VM reboots back into the ISO instead of the disk,
+        # causing Assisted Installer "pending user action: boot from disk" error.
+        phase('Ejecting discovery ISO', 62)
+        log('Ejecting ISO from VMs so next reboot boots from disk…')
+        _eject_cdroms(vm_names, log)
+
         # ── Step 8: Monitor installation ──────────────────────────────────────
         phase('Installing OpenShift', 65)
         log('Installation in progress — this takes 45–90 minutes…')
         deadline = time.time() + 2 * 3600  # 2 hours
-        last_status = ''
-        last_pct    = 0
+        last_status    = ''
+        last_pct       = 0
+        pending_handled = set()  # track VMs already rebooted for pending-user-action
 
         PHASE_PCT = {
             'preparing-for-installation': 65,
@@ -786,10 +862,26 @@ def _run_deploy(job_id: str, cfg: dict):
                     fail(f'Installation {status}: {status_info}')
                     return
 
+                # ── Check for pending-user-action on individual hosts ──────────
+                # Happens when a host rebooted back into the ISO instead of disk.
+                # Re-eject CDROM and reboot to recover automatically.
+                try:
+                    hr = _ai('GET', f'/clusters/{cluster_id}/hosts', token)
+                    for h in hr.json():
+                        h_status = h.get('status', '')
+                        h_id     = h.get('id', '')
+                        hostname = h.get('requested_hostname') or h_id[:8]
+                        if 'pending-user-action' in h_status and h_id not in pending_handled:
+                            log(f'  ⚠ Host {hostname} booted ISO instead of disk — auto-recovering…', 'warn')
+                            _eject_cdroms(vm_names, log)
+                            time.sleep(3)
+                            _reboot_vms(vm_names, log)
+                            pending_handled.add(h_id)
+                except Exception:
+                    pass  # don't fail monitoring on host-check errors
+
             except Exception as e:
                 consecutive_errors += 1
-                # Exponential backoff: log less frequently during repeated failures
-                # Always log first error; then only every 5th; max backoff 5 min
                 if consecutive_errors == 1:
                     log(f'  Monitoring error (retrying): {e}', 'warn')
                 elif consecutive_errors % 5 == 0:
