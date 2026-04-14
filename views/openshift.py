@@ -194,6 +194,70 @@ def validate_pull_secret():
         return jsonify({'valid': False, 'error': f'Invalid JSON: {e}'})
 
 
+# ── libvirt networks ─────────────────────────────────────────────────────────
+
+@ocp_bp.route('/api/openshift/networks')
+def list_networks():
+    err = _auth()
+    if err:
+        return err
+    if not _LIBVIRT:
+        return jsonify({'networks': []})
+    try:
+        conn = libvirt.open('qemu:///system')
+        nets = []
+        for net in conn.listAllNetworks(0):
+            try:
+                xml_str = net.XMLDesc(0)
+                root    = ET.fromstring(xml_str)
+                name    = net.name()
+                active  = net.isActive() == 1
+
+                # Pull bridge device name
+                bridge_el = root.find('bridge')
+                bridge    = bridge_el.get('name', '') if bridge_el is not None else ''
+
+                # Pull IP / CIDR from <ip address= prefix= or netmask=>
+                cidr = ''
+                ip_el = root.find('ip')
+                if ip_el is not None:
+                    addr = ip_el.get('address', '')
+                    prefix = ip_el.get('prefix', '')
+                    netmask = ip_el.get('netmask', '')
+                    if addr:
+                        if prefix:
+                            cidr = f'{addr}/{prefix}'
+                        elif netmask:
+                            # Convert netmask to prefix length
+                            import socket, struct
+                            packed = socket.inet_aton(netmask)
+                            bits   = bin(struct.unpack('!I', packed)[0]).count('1')
+                            # Use network address: zero out host bits
+                            ip_int = struct.unpack('!I', socket.inet_aton(addr))[0]
+                            mask_int = struct.unpack('!I', packed)[0]
+                            net_int = ip_int & mask_int
+                            net_addr = socket.inet_ntoa(struct.pack('!I', net_int))
+                            cidr = f'{net_addr}/{bits}'
+
+                # forward mode (nat / bridge / none)
+                fwd_el  = root.find('forward')
+                fwd_mode = fwd_el.get('mode', 'isolated') if fwd_el is not None else 'isolated'
+
+                nets.append({
+                    'name':    name,
+                    'bridge':  bridge,
+                    'cidr':    cidr,
+                    'active':  active,
+                    'forward': fwd_mode,
+                })
+            except Exception:
+                pass
+        conn.close()
+        return jsonify({'networks': nets})
+    except Exception as e:
+        return jsonify({'networks': [], 'error': str(e)})
+
+
 # ── Preflight checks ──────────────────────────────────────────────────────────
 
 @ocp_bp.route('/api/openshift/preflight')

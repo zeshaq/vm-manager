@@ -360,36 +360,123 @@ function StepNodes({ form, set, onNext, onBack }) {
 
 // ── Step 4: Network ───────────────────────────────────────────────────────────
 
+const FWD_BADGE = {
+  nat:      'bg-green-500/15 text-green-400',
+  bridge:   'bg-sky-500/15 text-sky-400',
+  route:    'bg-purple-500/15 text-purple-400',
+  open:     'bg-yellow-500/15 text-yellow-400',
+  isolated: 'bg-slate-500/15 text-slate-400',
+}
+
 function StepNetwork({ form, set, onNext, onBack }) {
   const isSNO = form.deployment_type === 'sno'
+  const [networks, setNetworks] = useState([])
+  const [loadingNets, setLN]    = useState(true)
+
+  useEffect(() => {
+    api.get('/openshift/networks')
+      .then(r => {
+        const nets = r.data.networks || []
+        setNetworks(nets)
+        // Auto-select first active network if nothing chosen yet
+        if (!form.libvirt_network && nets.length > 0) {
+          const first = nets.find(n => n.active) || nets[0]
+          set('libvirt_network', first.name)
+          if (first.cidr && !form.machine_cidr) set('machine_cidr', first.cidr)
+        }
+      })
+      .catch(() => {})
+      .finally(() => setLN(false))
+  }, [])
+
+  const selectNetwork = (net) => {
+    set('libvirt_network', net.name)
+    if (net.cidr) set('machine_cidr', net.cidr)
+  }
+
+  const selectedNet = networks.find(n => n.name === form.libvirt_network)
 
   return (
     <div className="space-y-5">
       <div>
         <h2 className="text-slate-100 font-bold text-lg mb-1">Network Configuration</h2>
         <p className="text-slate-400 text-sm">
-          The machine network is the libvirt network your VMs will use.
+          Choose the libvirt network your OpenShift VMs will use. The CIDR fills in automatically.
         </p>
       </div>
 
-      <div className="grid grid-cols-2 gap-4">
-        <Field label="libvirt Network" hint="Name of the libvirt network (default = virbr0 NAT)">
-          <input value={form.libvirt_network} onChange={e => set('libvirt_network', e.target.value)}
-            placeholder="default" className={inputCls} />
-        </Field>
-        <Field label="Machine Network CIDR" required hint="The IP range of the libvirt network">
+      {/* Network picker */}
+      <Field label="libvirt Network" required hint="Select a network — CIDR auto-fills. You can override it below.">
+        {loadingNets ? (
+          <div className="flex items-center gap-2 text-slate-400 text-sm h-10">
+            <Loader2 size={14} className="animate-spin" /> Loading networks…
+          </div>
+        ) : networks.length === 0 ? (
+          <div className="flex items-center gap-2">
+            <input value={form.libvirt_network}
+              onChange={e => set('libvirt_network', e.target.value)}
+              placeholder="default" className={inputCls} />
+            <span className="text-slate-500 text-xs whitespace-nowrap">no networks found</span>
+          </div>
+        ) : (
+          <div className="space-y-2">
+            {networks.map(net => (
+              <button key={net.name} type="button" onClick={() => selectNetwork(net)}
+                className={`w-full flex items-center gap-4 px-4 py-3 rounded-lg border text-left transition-all ${
+                  form.libvirt_network === net.name
+                    ? 'border-sky-500 bg-sky-500/10'
+                    : 'border-navy-500 bg-navy-700 hover:border-navy-400'
+                }`}>
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2 mb-0.5">
+                    <span className="text-slate-100 font-semibold text-sm">{net.name}</span>
+                    {net.bridge && (
+                      <span className="text-slate-500 text-xs font-mono">({net.bridge})</span>
+                    )}
+                    <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${FWD_BADGE[net.forward] || FWD_BADGE.isolated}`}>
+                      {net.forward}
+                    </span>
+                    {!net.active && (
+                      <span className="text-xs px-2 py-0.5 rounded-full bg-red-500/15 text-red-400">inactive</span>
+                    )}
+                  </div>
+                  <div className="text-slate-400 text-xs font-mono">
+                    {net.cidr || <span className="text-slate-600 italic">no IP configured</span>}
+                  </div>
+                </div>
+                {form.libvirt_network === net.name && (
+                  <CheckCircle size={16} className="text-sky-400 flex-shrink-0" />
+                )}
+              </button>
+            ))}
+          </div>
+        )}
+      </Field>
+
+      {/* CIDR override */}
+      <Field label="Machine Network CIDR" required
+        hint={selectedNet?.cidr ? `Auto-filled from "${selectedNet.name}" — edit if needed` : 'Enter the CIDR of your selected network'}>
+        <div className="flex gap-2">
           <input value={form.machine_cidr} onChange={e => set('machine_cidr', e.target.value)}
-            placeholder="192.168.122.0/24" className={inputCls + ' font-mono'} />
-        </Field>
-      </div>
+            placeholder="192.168.122.0/24" className={inputCls + ' font-mono flex-1'} />
+          {selectedNet?.cidr && form.machine_cidr !== selectedNet.cidr && (
+            <button type="button" onClick={() => set('machine_cidr', selectedNet.cidr)}
+              className="px-3 py-2 bg-navy-700 hover:bg-navy-600 border border-navy-500 rounded-md text-xs text-sky-400 transition-colors whitespace-nowrap">
+              Reset
+            </button>
+          )}
+        </div>
+      </Field>
 
       {!isSNO && (
         <div className="grid grid-cols-2 gap-4">
-          <Field label="API VIP" required hint="Reserved IP for the cluster API (must be in machine CIDR, not assigned to any VM)">
+          <Field label="API VIP" required
+            hint="Reserved IP for cluster API — must be in CIDR range, not assigned to a VM">
             <input value={form.api_vip} onChange={e => set('api_vip', e.target.value)}
               placeholder="192.168.122.100" className={inputCls + ' font-mono'} />
           </Field>
-          <Field label="Ingress VIP" required hint="Reserved IP for app routes (*.apps.cluster.domain)">
+          <Field label="Ingress VIP" required
+            hint="Reserved IP for *.apps routes">
             <input value={form.ingress_vip} onChange={e => set('ingress_vip', e.target.value)}
               placeholder="192.168.122.101" className={inputCls + ' font-mono'} />
           </Field>
@@ -397,13 +484,13 @@ function StepNetwork({ form, set, onNext, onBack }) {
       )}
 
       <div className="bg-navy-800 border border-navy-600 rounded-xl p-4 space-y-3">
-        <h3 className="text-slate-300 text-xs font-semibold uppercase tracking-wide">Internal Network Ranges</h3>
+        <h3 className="text-slate-300 text-xs font-semibold uppercase tracking-wide">Internal Cluster Networks</h3>
         <div className="grid grid-cols-2 gap-4">
-          <Field label="Cluster Network CIDR" hint="Pod network">
+          <Field label="Pod Network CIDR">
             <input value={form.cluster_cidr} onChange={e => set('cluster_cidr', e.target.value)}
               className={inputCls + ' font-mono text-xs'} />
           </Field>
-          <Field label="Service Network CIDR" hint="Service (ClusterIP) network">
+          <Field label="Service Network CIDR">
             <input value={form.service_cidr} onChange={e => set('service_cidr', e.target.value)}
               className={inputCls + ' font-mono text-xs'} />
           </Field>
@@ -414,7 +501,7 @@ function StepNetwork({ form, set, onNext, onBack }) {
       {isSNO && (
         <div className="bg-yellow-900/20 border border-yellow-700/40 rounded-xl p-4 text-xs text-yellow-300 space-y-1">
           <div className="font-semibold flex items-center gap-1.5"><AlertTriangle size={13} /> DNS required after install</div>
-          <div>Add these to your DNS (or /etc/hosts) once the SNO node boots:</div>
+          <div>Add these to your DNS or /etc/hosts on client machines:</div>
           <div className="font-mono bg-navy-900 rounded p-2 mt-1 space-y-0.5">
             <div>&lt;node-ip&gt;  api.{form.cluster_name || 'cluster'}.{form.base_domain || 'domain'}</div>
             <div>&lt;node-ip&gt;  *.apps.{form.cluster_name || 'cluster'}.{form.base_domain || 'domain'}</div>
