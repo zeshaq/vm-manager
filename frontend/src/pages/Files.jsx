@@ -4,7 +4,7 @@ import {
   Folder, FolderOpen, File, FileText, FileCode, FileImage,
   Upload, Download, Trash2, Edit3, FolderPlus, FilePlus, RotateCcw,
   Home, ChevronRight, ArrowLeft, X, Save, AlertCircle,
-  Loader2, RefreshCw, HardDrive, Copy, Check
+  Loader2, RefreshCw, HardDrive, Copy, Check, Lock, Unlock, ShieldAlert, Eye, EyeOff
 } from 'lucide-react'
 
 // ── helpers ───────────────────────────────────────────────────────────────────
@@ -65,6 +65,95 @@ const BOOKMARKS = [
   { label: 'tmp',  path: '/tmp' },
   { label: 'root', path: '/root' },
 ]
+
+// ── Editor modal ──────────────────────────────────────────────────────────────
+
+// ── Sudo password modal ───────────────────────────────────────────────────────
+
+function SudoModal({ onSuccess, onClose }) {
+  const [password, setPassword] = useState('')
+  const [showPass, setShowPass] = useState(false)
+  const [loading, setLoading]   = useState(false)
+  const [error, setError]       = useState('')
+  const inputRef = useRef(null)
+
+  useEffect(() => { inputRef.current?.focus() }, [])
+
+  const submit = async e => {
+    e?.preventDefault()
+    if (!password) return
+    setLoading(true)
+    setError('')
+    try {
+      await api.post('/files/sudo/enable', { password })
+      onSuccess()
+    } catch (e) {
+      setError(e.response?.data?.error || 'Authentication failed')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
+      <div className="bg-navy-800 border border-navy-500 rounded-xl shadow-2xl w-full max-w-sm mx-4 p-6">
+        <div className="flex items-center gap-3 mb-5">
+          <div className="p-2 rounded-lg bg-yellow-400/10">
+            <ShieldAlert size={20} className="text-yellow-400" />
+          </div>
+          <div>
+            <h2 className="text-slate-200 font-semibold text-sm">Enable Sudo Mode</h2>
+            <p className="text-slate-500 text-xs mt-0.5">Elevated access for 10 minutes</p>
+          </div>
+          <button onClick={onClose} className="ml-auto text-slate-500 hover:text-white p-1">
+            <X size={16} />
+          </button>
+        </div>
+
+        <form onSubmit={submit} className="space-y-4">
+          <div>
+            <label className="block text-xs text-slate-400 mb-1.5">Password for <span className="text-sky-400 font-mono">sudo</span></label>
+            <div className="relative">
+              <input
+                ref={inputRef}
+                type={showPass ? 'text' : 'password'}
+                value={password}
+                onChange={e => setPassword(e.target.value)}
+                placeholder="Your login password"
+                className="w-full bg-navy-900 border border-navy-500 focus:border-yellow-500 text-slate-200
+                           rounded-md px-3 py-2.5 text-sm pr-10 focus:outline-none"
+                autoComplete="current-password"
+              />
+              <button type="button" onClick={() => setShowPass(v => !v)}
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-300">
+                {showPass ? <EyeOff size={15} /> : <Eye size={15} />}
+              </button>
+            </div>
+          </div>
+
+          {error && (
+            <div className="flex items-center gap-2 text-red-300 text-xs bg-red-900/30 border border-red-800 rounded px-3 py-2">
+              <AlertCircle size={13} /> {error}
+            </div>
+          )}
+
+          <div className="flex gap-2 pt-1">
+            <button type="submit" disabled={loading || !password}
+              className="flex-1 flex items-center justify-center gap-2 bg-yellow-600 hover:bg-yellow-500
+                         disabled:opacity-40 text-white text-sm font-medium py-2.5 rounded-md transition-colors">
+              {loading ? <Loader2 size={14} className="animate-spin" /> : <Unlock size={14} />}
+              Authenticate
+            </button>
+            <button type="button" onClick={onClose}
+              className="px-4 py-2.5 text-sm text-slate-400 hover:text-white rounded-md hover:bg-navy-700 transition-colors">
+              Cancel
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  )
+}
 
 // ── Editor modal ──────────────────────────────────────────────────────────────
 
@@ -214,6 +303,8 @@ export default function Files() {
   const [newFolderName, setNewFolderName] = useState('')
   const [newFileMode, setNewFileMode]   = useState(false)
   const [newFileName, setNewFileName]   = useState('')
+  const [sudoModal, setSudoModal]       = useState(false)
+  const [sudoRemaining, setSudoRemaining] = useState(0)
   const [toast, setToast]         = useState({ msg: '', type: 'ok' })
   const [deleting, setDeleting]   = useState(false)
   const [copied, setCopied]       = useState(false)
@@ -241,6 +332,40 @@ export default function Files() {
       setLoading(false)
     }
   }, [])
+
+  // Poll sudo status on mount and keep countdown ticking
+  useEffect(() => {
+    const syncSudo = async () => {
+      try {
+        const r = await api.get('/files/sudo/status')
+        setSudoRemaining(r.data.remaining)
+      } catch {}
+    }
+    syncSudo()
+    const iv = setInterval(() => {
+      setSudoRemaining(s => {
+        if (s <= 0) return 0
+        const next = s - 1
+        if (next === 0) notify('Sudo mode expired', 'error')
+        return next
+      })
+    }, 1000)
+    return () => clearInterval(iv)
+  }, [])
+
+  const doSudoDisable = async () => {
+    try {
+      await api.post('/files/sudo/disable')
+      setSudoRemaining(0)
+      notify('Sudo mode disabled')
+    } catch {}
+  }
+
+  const onSudoSuccess = () => {
+    setSudoModal(false)
+    setSudoRemaining(600)
+    notify('Sudo mode active — 10 minutes', 'ok')
+  }
 
   useEffect(() => { loadDir('/home') }, [])
 
@@ -402,6 +527,23 @@ export default function Files() {
             title="Copy path">
             {copied ? <Check size={14} className="text-green-400" /> : <Copy size={14} />}
           </button>
+
+          {/* Sudo mode toggle */}
+          <div className="w-px h-5 bg-navy-600" />
+          {sudoRemaining > 0 ? (
+            <button onClick={doSudoDisable}
+              className="flex items-center gap-1.5 text-xs font-medium text-yellow-300 bg-yellow-500/10
+                         hover:bg-yellow-500/20 border border-yellow-500/30 px-2.5 py-1.5 rounded transition-colors">
+              <Unlock size={13} />
+              Sudo {Math.floor(sudoRemaining / 60)}:{String(sudoRemaining % 60).padStart(2, '0')}
+            </button>
+          ) : (
+            <button onClick={() => setSudoModal(true)}
+              className="flex items-center gap-1.5 text-xs text-slate-500 hover:text-yellow-300
+                         hover:bg-navy-700 px-2 py-1.5 rounded transition-colors">
+              <Lock size={13} /> Sudo
+            </button>
+          )}
 
           <div className="w-px h-5 bg-navy-600" />
 
@@ -626,6 +768,11 @@ export default function Files() {
           )}
         </div>
       </div>
+
+      {/* Sudo modal */}
+      {sudoModal && (
+        <SudoModal onSuccess={onSudoSuccess} onClose={() => setSudoModal(false)} />
+      )}
 
       {/* Editor overlay */}
       {editor && (
