@@ -126,21 +126,50 @@ def _ai(method: str, path: str, token: str, body=None, stream=False, timeout=30)
 
 # ── OCP version list ──────────────────────────────────────────────────────────
 
+# Hardcoded fallback — updated to latest as of 2026-04; regenerated at runtime
+_FALLBACK_VERSIONS = ['4.21', '4.20', '4.19', '4.18', '4.17', '4.16', '4.15', '4.14']
+_versions_cache: dict = {}   # { versions: [...], fetched_at: float }
+
+
+def _fetch_versions_from_mirror() -> list[str]:
+    """
+    Scrape available stable-X.Y channels from the OCP public mirror.
+    No auth required. Returns newest-first list like ['4.21', '4.20', ...].
+    """
+    import re
+    resp = _req.get(
+        'https://mirror.openshift.com/pub/openshift-v4/clients/ocp/',
+        timeout=10,
+    )
+    resp.raise_for_status()
+    channels = re.findall(r'stable-(\d+\.\d+)', resp.text)
+    unique = sorted(set(channels), key=lambda v: tuple(int(x) for x in v.split('.')), reverse=True)
+    return unique
+
+
 @ocp_bp.route('/api/openshift/versions')
 def ocp_versions():
     err = _auth()
     if err:
         return err
+
+    now = time.time()
+    cached = _versions_cache.get('data')
+    # Refresh at most once per hour
+    if cached and now - _versions_cache.get('fetched_at', 0) < 3600:
+        return jsonify({'versions': cached})
+
     try:
-        resp = _req.get(f'{AI_BASE}/openshift-versions', timeout=10)
-        resp.raise_for_status()
-        data = resp.json()
-        # Return as sorted list of version strings
-        versions = sorted(data.keys(), reverse=True) if isinstance(data, dict) else []
-        return jsonify({'versions': versions})
-    except Exception as e:
-        # Fallback list if API is unreachable
-        return jsonify({'versions': ['4.17', '4.16', '4.15', '4.14'], 'cached': True})
+        versions = _fetch_versions_from_mirror()
+        if versions:
+            _versions_cache['data']       = versions
+            _versions_cache['fetched_at'] = now
+            return jsonify({'versions': versions})
+    except Exception:
+        pass
+
+    # Fallback if mirror unreachable
+    return jsonify({'versions': _FALLBACK_VERSIONS, 'cached': True})
 
 
 # ── Pull secret validation ────────────────────────────────────────────────────

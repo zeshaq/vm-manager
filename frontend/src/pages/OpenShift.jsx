@@ -192,7 +192,14 @@ function StepCluster({ form, set, onNext, onBack }) {
 
   useEffect(() => {
     api.get('/openshift/versions')
-      .then(r => setVersions(r.data.versions || []))
+      .then(r => {
+        const v = r.data.versions || []
+        setVersions(v)
+        // Auto-select newest if form still has the static default
+        if (v.length > 0 && (form.ocp_version === '4.21' || !form.ocp_version)) {
+          set('ocp_version', v[0])
+        }
+      })
       .finally(() => setLV(false))
   }, [])
 
@@ -739,7 +746,7 @@ const DEFAULTS = {
   deployment_type:      'sno',
   cluster_name:         '',
   base_domain:          '',
-  ocp_version:          '4.16',
+  ocp_version:          '4.21',
   ssh_public_key:       '',
   // Control plane
   cp_vcpus:             8,
