@@ -3,9 +3,25 @@ import {
   Boxes, ChevronRight, ChevronLeft, CheckCircle, XCircle,
   AlertTriangle, Loader2, RefreshCw, Download, Server,
   Cpu, MemoryStick, HardDrive, Network, Key, Lock,
-  Shield, Terminal, ExternalLink, Copy, Check
+  Shield, Terminal, ExternalLink, Copy, Check, Save, Trash2
 } from 'lucide-react'
 import api from '../api'
+
+// ── credential persistence (localStorage) ────────────────────────────────────
+
+const CRED_KEY = 'ocp_saved_credentials'
+
+function loadSavedCreds() {
+  try { return JSON.parse(localStorage.getItem(CRED_KEY)) || {} }
+  catch { return {} }
+}
+function saveCreds(obj) {
+  const existing = loadSavedCreds()
+  localStorage.setItem(CRED_KEY, JSON.stringify({ ...existing, ...obj }))
+}
+function clearCreds() {
+  localStorage.removeItem(CRED_KEY)
+}
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
@@ -121,8 +137,15 @@ function StepPreflight({ onNext }) {
 // ── Step 1: Pull Secret + Offline Token ──────────────────────────────────────
 
 function StepPullSecret({ form, set, onNext, onBack }) {
-  const [validating, setV]   = useState(false)
-  const [result, setResult]  = useState(null)
+  const [validating, setV]  = useState(false)
+  const [result, setResult] = useState(null)
+  const [saved, setSaved]   = useState(false)
+
+  // Show "saved" badge if these values came from storage
+  useEffect(() => {
+    const c = loadSavedCreds()
+    if (c.pull_secret || c.offline_token) setSaved(true)
+  }, [])
 
   const validate = async () => {
     setV(true)
@@ -137,14 +160,46 @@ function StepPullSecret({ form, set, onNext, onBack }) {
     }
   }
 
+  const handleSave = () => {
+    saveCreds({ pull_secret: form.pull_secret, offline_token: form.offline_token })
+    setSaved(true)
+  }
+
+  const handleClear = () => {
+    clearCreds()
+    setSaved(false)
+    set('pull_secret', '')
+    set('offline_token', '')
+    setResult(null)
+  }
+
   return (
     <div className="space-y-6">
-      <div>
-        <h2 className="text-slate-100 font-bold text-lg mb-1">Red Hat Credentials</h2>
-        <p className="text-slate-400 text-sm">
-          Both a pull secret and an API offline token are required to deploy via
-          the Assisted Installer API.
-        </p>
+      <div className="flex items-start justify-between">
+        <div>
+          <h2 className="text-slate-100 font-bold text-lg mb-1">Red Hat Credentials</h2>
+          <p className="text-slate-400 text-sm">
+            Both a pull secret and an API offline token are required to deploy via the Assisted Installer API.
+          </p>
+        </div>
+        <div className="flex items-center gap-2 flex-shrink-0 ml-4">
+          {saved && (
+            <span className="flex items-center gap-1 text-xs text-green-400 bg-green-500/10 border border-green-500/20 px-2 py-1 rounded-md">
+              <Check size={11} /> Saved
+            </span>
+          )}
+          <button onClick={handleSave} disabled={!form.pull_secret || !form.offline_token}
+            title="Save to browser storage"
+            className="flex items-center gap-1.5 text-xs bg-sky-600 hover:bg-sky-500 disabled:opacity-40 text-white px-3 py-1.5 rounded-md transition-colors">
+            <Save size={12} /> Save
+          </button>
+          {saved && (
+            <button onClick={handleClear} title="Clear saved credentials"
+              className="flex items-center gap-1.5 text-xs bg-navy-600 hover:bg-red-900/50 border border-navy-500 hover:border-red-700 text-slate-400 hover:text-red-400 px-2 py-1.5 rounded-md transition-colors">
+              <Trash2 size={12} />
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Pull Secret */}
@@ -161,7 +216,7 @@ function StepPullSecret({ form, set, onNext, onBack }) {
         </div>
         <textarea
           value={form.pull_secret}
-          onChange={e => { set('pull_secret', e.target.value); setResult(null) }}
+          onChange={e => { set('pull_secret', e.target.value); setResult(null); setSaved(false) }}
           rows={5}
           placeholder='{"auths":{"cloud.openshift.com":{"auth":"..."},...}}'
           className={inputCls + ' font-mono text-xs resize-none'}
@@ -184,7 +239,7 @@ function StepPullSecret({ form, set, onNext, onBack }) {
         </div>
       </div>
 
-      {/* Offline token — separate from pull secret */}
+      {/* Offline token */}
       <div className="space-y-2">
         <div className="flex items-center justify-between">
           <label className="text-sm font-medium text-slate-300">
@@ -198,19 +253,15 @@ function StepPullSecret({ form, set, onNext, onBack }) {
         </div>
         <textarea
           value={form.offline_token}
-          onChange={e => set('offline_token', e.target.value)}
+          onChange={e => { set('offline_token', e.target.value); setSaved(false) }}
           rows={3}
           placeholder="Paste your offline token from console.redhat.com/openshift/token …"
           className={inputCls + ' font-mono text-xs resize-none'}
         />
         <p className="text-slate-500 text-xs">
-          This is a long JWT used to authenticate with the Assisted Installer API.
-          It is <strong className="text-slate-400">different</strong> from the pull secret —
-          get it from{' '}
+          Different from the pull secret — get it from{' '}
           <a href="https://console.redhat.com/openshift/token" target="_blank" rel="noopener noreferrer"
-            className="text-sky-500 hover:underline">
-            console.redhat.com/openshift/token
-          </a>.
+            className="text-sky-500 hover:underline">console.redhat.com/openshift/token</a>.
         </p>
       </div>
 
@@ -286,10 +337,28 @@ function StepCluster({ form, set, onNext, onBack }) {
         }
       </Field>
 
-      <Field label="SSH Public Key" hint="Paste your ~/.ssh/id_rsa.pub — lets you SSH into nodes post-install">
-        <textarea value={form.ssh_public_key} onChange={e => set('ssh_public_key', e.target.value)}
-          rows={3} placeholder="ssh-rsa AAAA..." className={inputCls + ' font-mono text-xs resize-none'} />
-      </Field>
+      <div className="space-y-1">
+        <div className="flex items-center justify-between">
+          <label className={labelCls}>SSH Public Key</label>
+          <div className="flex items-center gap-2">
+            {loadSavedCreds().ssh_public_key && !form.ssh_public_key && (
+              <button onClick={() => set('ssh_public_key', loadSavedCreds().ssh_public_key)}
+                className="text-xs text-sky-400 hover:underline">Load saved</button>
+            )}
+            {form.ssh_public_key && (
+              <button onClick={() => { saveCreds({ ssh_public_key: form.ssh_public_key }) }}
+                className="flex items-center gap-1 text-xs text-sky-400 hover:text-sky-300 transition-colors">
+                <Save size={11} /> Save key
+              </button>
+            )}
+          </div>
+        </div>
+        <textarea value={form.ssh_public_key}
+          onChange={e => set('ssh_public_key', e.target.value)}
+          rows={3} placeholder="ssh-rsa AAAA..."
+          className={inputCls + ' font-mono text-xs resize-none'} />
+        <p className={labelCls + ' mt-1'}>Paste your ~/.ssh/id_rsa.pub — lets you SSH into nodes post-install</p>
+      </div>
 
       <NavButtons onBack={onBack} onNext={onNext}
         nextDisabled={!form.cluster_name || !form.base_domain || !form.ocp_version} />
@@ -907,7 +976,16 @@ const DEFAULTS = {
 
 export default function OpenShiftPage() {
   const [step, setStep]       = useState(0)
-  const [form, setForm]       = useState(DEFAULTS)
+  const [form, setForm]       = useState(() => {
+    // Pre-fill from saved credentials on first render
+    const saved = loadSavedCreds()
+    return {
+      ...DEFAULTS,
+      pull_secret:    saved.pull_secret    || '',
+      offline_token:  saved.offline_token  || '',
+      ssh_public_key: saved.ssh_public_key || '',
+    }
+  })
   const [jobId, setJobId]     = useState(null)
   const [deploying, setDep]   = useState(false)
   const [error, setError]     = useState('')
