@@ -8,8 +8,6 @@ import libvirt
 from views.listing import listing_bp
 from views.creation import creation_bp
 from views.storage import storage_bp
-from views.audit import audit_bp
-from views.loadbalancer import lb_bp
 from views.setup import setup_bp
 from views.terminal import terminal_bp
 from views.host_terminal import host_terminal_bp
@@ -26,8 +24,6 @@ sock.init_app(app)
 app.register_blueprint(listing_bp)
 app.register_blueprint(creation_bp)
 app.register_blueprint(storage_bp)
-app.register_blueprint(audit_bp)
-app.register_blueprint(lb_bp)
 app.register_blueprint(setup_bp)
 app.register_blueprint(terminal_bp)
 app.register_blueprint(host_terminal_bp)

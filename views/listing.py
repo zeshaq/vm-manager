@@ -2,7 +2,6 @@ import libvirt
 import xml.etree.ElementTree as ET
 from flask import Blueprint, render_template, request, redirect, url_for, Response, jsonify
 import time
-from .audit import log_event
 from . import project_utils
 
 listing_bp = Blueprint('listing', __name__)
@@ -119,17 +118,14 @@ def list_vms():
                 if action == 'start':
                     if not dom.isActive():
                         dom.create()
-                        log_event('VM Started', target_uuid=uuid, target_name=dom.name())
                 elif action == 'stop':
                     if dom.isActive():
                         dom.destroy()
-                        log_event('VM Stopped', target_uuid=uuid, target_name=dom.name())
                 elif action == 'delete':
                     vm_name = dom.name()
                     if dom.isActive():
                         dom.destroy()
                     dom.undefine()
-                    log_event('VM Deleted', target_uuid=uuid, target_name=vm_name)
             except libvirt.libvirtError as e:
                 print(f"Error performing action {action} on VM {uuid}: {e}")
         
@@ -219,7 +215,6 @@ def delete_project():
                     
                     # Redefine the VM with the modified XML
                     conn.defineXML(ET.tostring(tree).decode())
-                    log_event('Project Removed', target_uuid=domain.UUIDString(), target_name=domain.name(), details=f"Project '{project_to_delete}' was removed.")
 
     except libvirt.libvirtError as e:
         print(f"Error during project deletion: {e}")
@@ -548,7 +543,6 @@ def update_boot_order(uuid):
         apply_order(boot2, 2)
         
         conn.defineXML(ET.tostring(tree).decode())
-        log_event('Boot Order Updated', target_uuid=uuid, target_name=dom.name(), details=f"1st: {boot1}, 2nd: {boot2}")
         return jsonify({'success': True})
 
     except libvirt.libvirtError as e:
@@ -681,7 +675,6 @@ def start_vm(uuid):
         try:
             dom = conn.lookupByUUIDString(uuid)
             dom.create()
-            log_event('VM Started', target_uuid=uuid, target_name=dom.name())
         except libvirt.libvirtError as e:
             print(f"Error starting VM: {e}")
         finally:
@@ -696,7 +689,6 @@ def stop_vm(uuid):
             dom = conn.lookupByUUIDString(uuid)
             if dom.isActive():
                 dom.destroy()
-                log_event('VM Stopped', target_uuid=uuid, target_name=dom.name())
         except libvirt.libvirtError as e:
             print(f"Error stopping VM: {e}")
         finally:
@@ -712,7 +704,6 @@ def stop_all_vms():
             for domain in domains:
                 if domain.isActive():
                     domain.destroy()
-                    log_event('VM Stopped', target_uuid=domain.UUIDString(), target_name=domain.name(), details="Part of Stop All")
         except libvirt.libvirtError as e:
             print(f"Error stopping all VMs: {e}")
         finally:
@@ -729,7 +720,6 @@ def delete_vm(uuid):
             if dom.isActive():
                 dom.destroy()
             dom.undefine()
-            log_event('VM Deleted', target_uuid=uuid, target_name=vm_name)
         except libvirt.libvirtError as e:
             print(f"Error deleting VM: {e}")
         finally:
@@ -920,7 +910,6 @@ def create_snapshot(uuid):
             dom = conn.lookupByUUIDString(uuid)
             xml = f"<domainsnapshot><name>{snapshot_name}</name></domainsnapshot>"
             dom.snapshotCreateXML(xml, 0)
-            log_event('Snapshot Created', target_uuid=uuid, target_name=dom.name(), details=f"Snapshot: {snapshot_name}")
         except libvirt.libvirtError as e:
             return f"Error creating snapshot: {e}"
         finally:
@@ -936,7 +925,6 @@ def revert_snapshot(uuid):
             dom = conn.lookupByUUIDString(uuid)
             snapshot = dom.snapshotLookupByName(snapshot_name, 0)
             dom.revertToSnapshot(snapshot, 0)
-            log_event('Snapshot Reverted', target_uuid=uuid, target_name=dom.name(), details=f"Snapshot: {snapshot_name}")
         except libvirt.libvirtError as e:
             return f"Error reverting to snapshot: {e}"
         finally:
@@ -952,7 +940,6 @@ def delete_snapshot(uuid):
             dom = conn.lookupByUUIDString(uuid)
             snapshot = dom.snapshotLookupByName(snapshot_name, 0)
             snapshot.delete(0)
-            log_event('Snapshot Deleted', target_uuid=uuid, target_name=dom.name(), details=f"Snapshot: {snapshot_name}")
         except libvirt.libvirtError as e:
             return f"Error deleting snapshot: {e}"
         finally:
