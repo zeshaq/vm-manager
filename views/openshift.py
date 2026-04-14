@@ -51,12 +51,41 @@ ocp_bp = Blueprint('openshift', __name__)
 AI_BASE  = 'https://api.openshift.com/api/assisted-install/v2'
 SSO_URL  = ('https://sso.redhat.com/auth/realms/redhat-external'
             '/protocol/openid-connect/token')
-WORK_DIR = Path.home() / 'hypercloud' / 'openshift'
+WORK_DIR  = Path.home() / 'hypercloud' / 'openshift'
+_JOBS_FILE = WORK_DIR / 'jobs.json'
 
 # per-job dict: job_id → { status, logs, progress, phase, result, config }
 _jobs: dict = {}
 _token_cache: dict = {}  # ps_hash → { token, expires_at }
 _lock = threading.Lock()
+
+
+# ── job persistence ───────────────────────────────────────────────────────────
+
+def _load_jobs():
+    """Load persisted jobs from disk on startup."""
+    global _jobs
+    try:
+        WORK_DIR.mkdir(parents=True, exist_ok=True)
+        if _JOBS_FILE.exists():
+            with open(_JOBS_FILE) as f:
+                _jobs = json.load(f)
+    except Exception:
+        _jobs = {}
+
+def _save_jobs():
+    """Persist current jobs dict to disk (called under _lock)."""
+    try:
+        WORK_DIR.mkdir(parents=True, exist_ok=True)
+        tmp = _JOBS_FILE.with_suffix('.tmp')
+        with open(tmp, 'w') as f:
+            json.dump(_jobs, f)
+        tmp.replace(_JOBS_FILE)
+    except Exception:
+        pass
+
+# Load on import
+_load_jobs()
 
 
 # ── helpers ───────────────────────────────────────────────────────────────────
@@ -72,12 +101,14 @@ def _job_log(job_id: str, msg: str, level: str = 'info'):
     with _lock:
         if job_id in _jobs:
             _jobs[job_id]['logs'].append({'ts': ts, 'msg': msg, 'level': level})
+            _save_jobs()
 
 
 def _job_set(job_id: str, **kw):
     with _lock:
         if job_id in _jobs:
             _jobs[job_id].update(kw)
+            _save_jobs()
 
 
 # ── Assisted Installer API ────────────────────────────────────────────────────
@@ -389,6 +420,7 @@ def deploy():
             'result':   None,
             'created':  time.time(),
         }
+        _save_jobs()
 
     t = threading.Thread(target=_run_deploy, args=(job_id, cfg), daemon=True,
                          name=f'ocp-deploy-{job_id}')
@@ -422,7 +454,9 @@ def delete_job(job_id):
     err = _auth()
     if err:
         return err
-    _jobs.pop(job_id, None)
+    with _lock:
+        _jobs.pop(job_id, None)
+        _save_jobs()
     return jsonify({'ok': True})
 
 
