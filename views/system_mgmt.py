@@ -320,12 +320,12 @@ def security_overview():
     who_out, _, _ = _run(['who'])
     out['logged_in'] = [l.strip() for l in who_out.splitlines() if l.strip()]
 
-    # Listening ports
+    # Listening ports — ss output: Netid State Recv-Q Send-Q Local Peer [Process]
     ss_out, _, _ = _run(['ss', '-tlnup'])
     ports = []
-    for line in ss_out.splitlines()[1:]:
+    for line in ss_out.splitlines()[1:]:   # skip header
         parts = line.split()
-        if len(parts) >= 5 and parts[0] in ('LISTEN', 'UNCONN'):
+        if len(parts) >= 5 and parts[1] in ('LISTEN', 'UNCONN'):
             local   = parts[4]
             process = parts[6] if len(parts) > 6 else ''
             ports.append({'local': local, 'process': process})
