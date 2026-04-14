@@ -50,7 +50,7 @@ ocp_bp = Blueprint('openshift', __name__)
 AI_BASE  = 'https://api.openshift.com/api/assisted-install/v2'
 SSO_URL  = ('https://sso.redhat.com/auth/realms/redhat-external'
             '/protocol/openid-connect/token')
-WORK_DIR = Path('/var/lib/hypercloud/openshift')
+WORK_DIR = Path.home() / 'hypercloud' / 'openshift'
 
 # per-job dict: job_id → { status, logs, progress, phase, result, config }
 _jobs: dict = {}
