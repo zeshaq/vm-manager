@@ -582,6 +582,18 @@ def _run_deploy(job_id: str, cfg: dict):
                             pct = 22 + int(done / total * 10)
                             _job_set(job_id, progress=pct)
             log(f'ISO downloaded: {iso_path} ✓')
+            # QEMU runs as libvirt-qemu and can't read files in a user home dir
+            # unless the file and all parent directories are world-readable.
+            os.chmod(iso_path, 0o644)
+            # Walk up to WORK_DIR making sure each dir is o+x so qemu can traverse
+            p = iso_path.parent
+            while p != WORK_DIR.parent:
+                try:
+                    current = p.stat().st_mode
+                    os.chmod(p, current | 0o111)  # add execute/search for all
+                except Exception:
+                    pass
+                p = p.parent
         except Exception as e:
             fail(f'ISO download failed: {e}')
             return
@@ -620,7 +632,6 @@ def _run_deploy(job_id: str, cfg: dict):
 
                 disk_path = disk_dir / f'{vm_name}.qcow2'
                 # Create qcow2 disk
-                import subprocess
                 r = subprocess.run(
                     ['qemu-img', 'create', '-f', 'qcow2', str(disk_path), f'{disk_gb}G'],
                     capture_output=True, text=True,
@@ -628,6 +639,11 @@ def _run_deploy(job_id: str, cfg: dict):
                 if r.returncode != 0:
                     fail(f'qemu-img failed for {vm_name}: {r.stderr}')
                     return
+                # Ensure qemu (libvirt-qemu) can read the disk image
+                try:
+                    os.chmod(disk_path, 0o644)
+                except Exception:
+                    pass
 
                 net_name = cfg.get('libvirt_network', 'default')
                 # Detect host bridges (br-real etc) — need type='bridge' XML
