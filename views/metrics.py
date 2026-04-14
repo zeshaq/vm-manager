@@ -1,14 +1,22 @@
 """
-Prometheus proxy — all queries go through here so:
-  - Prometheus stays on localhost (not exposed publicly)
-  - Auth is enforced by Flask session
+Host + VM metrics — pure Python, no external services required.
+
+A daemon thread samples psutil every INTERVAL seconds and stores readings
+in fixed-length deques (ring buffer).  The API endpoints serve current
+snapshots plus the in-memory history.
 """
+
+import collections
+import threading
 import time
 import xml.etree.ElementTree as ET
-import urllib.request
-import urllib.parse
-import json as _json
 from flask import Blueprint, jsonify, request, session
+
+try:
+    import psutil
+    _PSUTIL = True
+except ImportError:
+    _PSUTIL = False
 
 try:
     import libvirt
@@ -18,13 +26,94 @@ except ImportError:
 
 metrics_bp = Blueprint('metrics', __name__)
 
-PROMETHEUS = 'http://localhost:9090'
+# ── ring-buffer config ────────────────────────────────────────────────────────
+INTERVAL    = 15          # seconds between samples
+HISTORY_LEN = 5760        # 5760 × 15 s = 24 hours
 
-# ── Per-VM sample store for delta-based CPU / disk / net rates ────────────────
-# { uuid: { 'cpu_ns': int, 'wall_ns': int, 'disk_r': int, 'disk_w': int,
-#           'net_rx': int, 'net_tx': int, 'ts': float } }
-_vm_samples: dict = {}
+_history = {
+    'cpu':        collections.deque(maxlen=HISTORY_LEN),
+    'memory':     collections.deque(maxlen=HISTORY_LEN),
+    'load':       collections.deque(maxlen=HISTORY_LEN),
+    'net_rx':     collections.deque(maxlen=HISTORY_LEN),
+    'net_tx':     collections.deque(maxlen=HISTORY_LEN),
+    'disk_read':  collections.deque(maxlen=HISTORY_LEN),
+    'disk_write': collections.deque(maxlen=HISTORY_LEN),
+}
+_lock      = threading.Lock()
+_prev_net  = None   # (ts, bytes_recv, bytes_sent)
+_prev_disk = None   # (ts, read_bytes, write_bytes)
 
+
+def _collect_loop():
+    """Background daemon thread — runs forever, never raises."""
+    global _prev_net, _prev_disk
+
+    # Prime cpu_percent so first real call is non-blocking
+    if _PSUTIL:
+        psutil.cpu_percent(interval=None)
+
+    while True:
+        try:
+            if not _PSUTIL:
+                time.sleep(INTERVAL)
+                continue
+
+            ts = int(time.time())
+
+            # CPU
+            cpu_pct = psutil.cpu_percent(interval=None)
+
+            # Memory
+            mem = psutil.virtual_memory()
+
+            # Load average
+            try:
+                load1 = psutil.getloadavg()[0]
+            except AttributeError:
+                load1 = 0.0
+
+            # Network rates
+            net = psutil.net_io_counters()
+            net_rx_rate = net_tx_rate = 0.0
+            if _prev_net:
+                dt = ts - _prev_net[0]
+                if dt > 0:
+                    net_rx_rate = max(0.0, (net.bytes_recv - _prev_net[1]) / dt)
+                    net_tx_rate = max(0.0, (net.bytes_sent - _prev_net[2]) / dt)
+            _prev_net = (ts, net.bytes_recv, net.bytes_sent)
+
+            # Disk I/O rates
+            disk_io = psutil.disk_io_counters()
+            disk_r_rate = disk_w_rate = 0.0
+            if _prev_disk and disk_io:
+                dt = ts - _prev_disk[0]
+                if dt > 0:
+                    disk_r_rate = max(0.0, (disk_io.read_bytes  - _prev_disk[1]) / dt)
+                    disk_w_rate = max(0.0, (disk_io.write_bytes - _prev_disk[2]) / dt)
+            if disk_io:
+                _prev_disk = (ts, disk_io.read_bytes, disk_io.write_bytes)
+
+            with _lock:
+                _history['cpu'].append([ts, round(cpu_pct, 1)])
+                _history['memory'].append([ts, round(mem.percent, 1)])
+                _history['load'].append([ts, round(load1, 2)])
+                _history['net_rx'].append([ts, round(net_rx_rate)])
+                _history['net_tx'].append([ts, round(net_tx_rate)])
+                _history['disk_read'].append([ts, round(disk_r_rate)])
+                _history['disk_write'].append([ts, round(disk_w_rate)])
+
+        except Exception:
+            pass   # never crash the thread
+
+        time.sleep(INTERVAL)
+
+
+# Start collector once when this module is first imported
+_thread = threading.Thread(target=_collect_loop, daemon=True, name='metrics-collector')
+_thread.start()
+
+
+# ── helpers ───────────────────────────────────────────────────────────────────
 
 def _auth():
     if 'username' not in session:
@@ -32,54 +121,12 @@ def _auth():
     return None
 
 
-def _prom(path, params=None):
-    """GET a Prometheus API endpoint, return parsed JSON."""
-    url = f'{PROMETHEUS}{path}'
-    if params:
-        url += '?' + urllib.parse.urlencode(params)
-    try:
-        with urllib.request.urlopen(url, timeout=10) as resp:
-            return _json.loads(resp.read())
-    except Exception as e:
-        return {'status': 'error', 'error': str(e)}
+def _since(key, cutoff):
+    with _lock:
+        return [[ts, v] for ts, v in _history[key] if ts >= cutoff]
 
 
-def _scalar(query):
-    """Return the single float value for an instant query, or None."""
-    result = _prom('/api/v1/query', {'query': query})
-    try:
-        return float(result['data']['result'][0]['value'][1])
-    except (KeyError, IndexError, TypeError, ValueError):
-        return None
-
-
-def _range_series(query, start, end, step):
-    """Return list of [timestamp, value] pairs for a range query."""
-    result = _prom('/api/v1/query_range', {
-        'query': query, 'start': start, 'end': end, 'step': step,
-    })
-    try:
-        results = result['data']['result']
-        if not results:
-            return []
-        # Sum across all series if multiple (e.g. per-CPU)
-        if len(results) == 1:
-            return [[int(v[0]), float(v[1])] for v in results[0]['values']]
-        # Multiple series — sum them per timestamp
-        from collections import defaultdict
-        totals = defaultdict(float)
-        for series in results:
-            for ts, val in series['values']:
-                try:
-                    totals[int(ts)] += float(val)
-                except ValueError:
-                    pass
-        return [[ts, v] for ts, v in sorted(totals.items())]
-    except (KeyError, IndexError, TypeError):
-        return []
-
-
-# ── Single dashboard data endpoint ───────────────────────────────────────────
+# ── /api/metrics/dashboard ───────────────────────────────────────────────────
 
 @metrics_bp.route('/api/metrics/dashboard')
 def dashboard():
@@ -87,207 +134,101 @@ def dashboard():
     if err:
         return err
 
+    if not _PSUTIL:
+        return jsonify({'error': 'psutil not installed — run: pip install psutil'}), 503
+
     minutes = int(request.args.get('minutes', 60))
-    now = int(time.time())
-    start = now - minutes * 60
-    # Pick step so we get ~120 data points
-    step = max(15, (minutes * 60) // 120)
+    cutoff  = int(time.time()) - minutes * 60
 
-    # ── Instant values ────────────────────────────────────────────────────────
-    cpu_pct   = _scalar('100 - (avg(irate(node_cpu_seconds_total{mode="idle"}[2m])) * 100)')
-    mem_total = _scalar('node_memory_MemTotal_bytes')
-    mem_avail = _scalar('node_memory_MemAvailable_bytes')
-    load1     = _scalar('node_load1')
-    load5     = _scalar('node_load5')
-    load15    = _scalar('node_load15')
+    cpu_pct = psutil.cpu_percent(interval=0.1)
+    mem     = psutil.virtual_memory()
 
-    mem_used  = (mem_total - mem_avail) if mem_total and mem_avail else None
-    mem_pct   = (mem_used / mem_total * 100) if mem_total and mem_used else None
+    try:
+        disk       = psutil.disk_usage('/')
+        disk_pct   = round(disk.percent, 1)
+        disk_used  = disk.used
+        disk_total = disk.total
+    except Exception:
+        disk_pct = disk_used = disk_total = None
 
-    # ── Disk space ────────────────────────────────────────────────────────────
-    disk_total = _scalar('node_filesystem_size_bytes{mountpoint="/",fstype!="tmpfs"}')
-    disk_avail = _scalar('node_filesystem_avail_bytes{mountpoint="/",fstype!="tmpfs"}')
-    disk_used  = (disk_total - disk_avail) if disk_total and disk_avail else None
-    disk_pct   = (disk_used / disk_total * 100) if disk_total and disk_used else None
-
-    # ── Historical series ─────────────────────────────────────────────────────
-    cpu_hist   = _range_series('100 - (avg(irate(node_cpu_seconds_total{mode="idle"}[2m])) * 100)', start, now, step)
-    mem_hist   = _range_series('(node_memory_MemTotal_bytes - node_memory_MemAvailable_bytes) / node_memory_MemTotal_bytes * 100', start, now, step)
-    load_hist  = _range_series('node_load1', start, now, step)
-    net_rx     = _range_series('sum(irate(node_network_receive_bytes_total{device!~"lo|docker.*|br-.*|virbr.*"}[2m]))', start, now, step)
-    net_tx     = _range_series('sum(irate(node_network_transmit_bytes_total{device!~"lo|docker.*|br-.*|virbr.*"}[2m]))', start, now, step)
-    disk_read  = _range_series('sum(irate(node_disk_read_bytes_total[2m]))', start, now, step)
-    disk_write = _range_series('sum(irate(node_disk_written_bytes_total[2m]))', start, now, step)
+    try:
+        load1, load5, load15 = psutil.getloadavg()
+    except AttributeError:
+        load1 = load5 = load15 = 0.0
 
     return jsonify({
-        'cpu_pct':    round(cpu_pct, 1)  if cpu_pct  is not None else None,
-        'mem_pct':    round(mem_pct, 1)  if mem_pct  is not None else None,
-        'mem_used':   mem_used,
-        'mem_total':  mem_total,
-        'disk_pct':   round(disk_pct, 1) if disk_pct is not None else None,
+        'cpu_pct':    round(cpu_pct, 1),
+        'mem_pct':    round(mem.percent, 1),
+        'mem_used':   mem.used,
+        'mem_total':  mem.total,
+        'disk_pct':   disk_pct,
         'disk_used':  disk_used,
         'disk_total': disk_total,
-        'load1':      round(load1,  2)   if load1    is not None else None,
-        'load5':      round(load5,  2)   if load5    is not None else None,
-        'load15':     round(load15, 2)   if load15   is not None else None,
+        'load1':      round(load1,  2),
+        'load5':      round(load5,  2),
+        'load15':     round(load15, 2),
         'history': {
-            'cpu':        cpu_hist,
-            'memory':     mem_hist,
-            'load':       load_hist,
-            'net_rx':     net_rx,
-            'net_tx':     net_tx,
-            'disk_read':  disk_read,
-            'disk_write': disk_write,
+            'cpu':        _since('cpu',        cutoff),
+            'memory':     _since('memory',     cutoff),
+            'load':       _since('load',       cutoff),
+            'net_rx':     _since('net_rx',     cutoff),
+            'net_tx':     _since('net_tx',     cutoff),
+            'disk_read':  _since('disk_read',  cutoff),
+            'disk_write': _since('disk_write', cutoff),
         },
     })
 
 
-# ── Docker / container metrics ────────────────────────────────────────────────
+# ── /api/metrics/vms ─────────────────────────────────────────────────────────
 
-@metrics_bp.route('/api/metrics/containers')
-def containers():
-    err = _auth()
-    if err:
-        return err
+_vm_samples: dict = {}
 
-    minutes = int(request.args.get('minutes', 30))
-    now = int(time.time())
-    start = now - minutes * 60
-    step = max(15, (minutes * 60) // 60)
-
-    # Current CPU % per container (cAdvisor)
-    cpu_result = _prom('/api/v1/query', {
-        'query': 'sum by (name) (irate(container_cpu_usage_seconds_total{name!="",name!~"k8s_.*"}[2m])) * 100'
-    })
-    mem_result = _prom('/api/v1/query', {
-        'query': 'container_memory_usage_bytes{name!="",name!~"k8s_.*"}'
-    })
-    mem_limit_result = _prom('/api/v1/query', {
-        'query': 'container_spec_memory_limit_bytes{name!="",name!~"k8s_.*"}'
-    })
-
-    # Build per-container instant stats
-    containers_map = {}
-
-    try:
-        for r in (cpu_result.get('data', {}).get('result') or []):
-            name = r['metric'].get('name', '')
-            if name:
-                containers_map.setdefault(name, {})['cpu_pct'] = round(float(r['value'][1]), 2)
-    except Exception:
-        pass
-
-    try:
-        for r in (mem_result.get('data', {}).get('result') or []):
-            name = r['metric'].get('name', '')
-            if name:
-                containers_map.setdefault(name, {})['mem_bytes'] = int(float(r['value'][1]))
-    except Exception:
-        pass
-
-    try:
-        for r in (mem_limit_result.get('data', {}).get('result') or []):
-            name = r['metric'].get('name', '')
-            if name:
-                limit = int(float(r['value'][1]))
-                containers_map.setdefault(name, {})['mem_limit'] = limit if limit > 0 else None
-    except Exception:
-        pass
-
-    stats = [{'name': k, **v} for k, v in sorted(containers_map.items())]
-
-    # Top 5 containers by CPU for history chart
-    top_names = sorted(containers_map.items(), key=lambda x: x[1].get('cpu_pct', 0), reverse=True)[:5]
-    history = {}
-    for name, _ in top_names:
-        safe = name.replace('"', '')
-        series = _range_series(
-            f'sum(irate(container_cpu_usage_seconds_total{{name="{safe}"}}[2m])) * 100',
-            start, now, step
-        )
-        if series:
-            history[name] = series
-
-    return jsonify({'containers': stats, 'history': history})
-
-
-# ── Raw proxy for custom PromQL ───────────────────────────────────────────────
-
-@metrics_bp.route('/api/metrics/query')
-def query():
-    err = _auth()
-    if err:
-        return err
-    q = request.args.get('q', '')
-    if not q:
-        return jsonify({'error': 'q param required'}), 400
-    return jsonify(_prom('/api/v1/query', {'query': q}))
-
-
-# ── Per-VM stats ──────────────────────────────────────────────────────────────
 
 def _parse_vm_stats(dom):
-    """
-    Return a dict of instantaneous + rate stats for a single running domain.
-    CPU% is computed as a delta against the previous call stored in _vm_samples.
-    Disk and network rates are similarly delta-based.
-    Returns None if the domain is not running.
-    """
     global _vm_samples
 
     try:
         state, _ = dom.state(0)
     except Exception:
         return None
-    if state != 1:  # VIR_DOMAIN_RUNNING
+    if state != 1:
         return None
 
     uuid = dom.UUIDString()
-    name = dom.name()
-    now = time.time()
+    now  = time.time()
 
-    # ── Memory ────────────────────────────────────────────────────────────────
-    mem_used = mem_total = None
+    mem_used = mem_total = cpu_ns = None
     try:
-        info = dom.info()          # [state, maxMem, memory, nrVirtCpu, cpuTime]
-        mem_total = info[1] * 1024  # KiB → bytes (maxMem)
-        mem_used  = info[2] * 1024  # KiB → bytes (current balloon)
+        info      = dom.info()
+        mem_total = info[1] * 1024
+        mem_used  = info[2] * 1024
+        cpu_ns    = info[4]
     except Exception:
         pass
 
-    # ── CPU time ─────────────────────────────────────────────────────────────
-    cpu_ns = None
-    try:
-        cpu_ns = dom.info()[4]     # nanoseconds of CPU time consumed
-    except Exception:
-        pass
-
-    # ── Disk I/O ─────────────────────────────────────────────────────────────
     disk_r_bytes = disk_w_bytes = 0
+    root = None
     try:
-        xml = dom.XMLDesc(0)
+        xml  = dom.XMLDesc(0)
         root = ET.fromstring(xml)
         for disk in root.findall('.//devices/disk[@device="disk"]'):
             tgt = disk.find('target')
             if tgt is None:
                 continue
-            dev = tgt.get('dev', '')
             try:
-                stats = dom.blockStats(dev)
-                # (rd_req, rd_bytes, wr_req, wr_bytes, errs)
-                disk_r_bytes += stats[1]
-                disk_w_bytes += stats[3]
+                st = dom.blockStats(tgt.get('dev', ''))
+                disk_r_bytes += st[1]
+                disk_w_bytes += st[3]
             except Exception:
                 pass
     except Exception:
         pass
 
-    # ── Network I/O ──────────────────────────────────────────────────────────
     net_rx_bytes = net_tx_bytes = 0
     try:
-        xml = xml if 'xml' in dir() else dom.XMLDesc(0)
-        root = root if 'root' in dir() else ET.fromstring(xml)
-        for iface in root.findall('.//devices/interface[@type]'):
+        if root is None:
+            root = ET.fromstring(dom.XMLDesc(0))
+        for iface in root.findall('.//devices/interface'):
             tgt = iface.find('target')
             if tgt is None:
                 continue
@@ -295,44 +236,31 @@ def _parse_vm_stats(dom):
             if not dev:
                 continue
             try:
-                stats = dom.interfaceStats(dev)
-                # (rx_bytes, rx_packets, rx_errs, rx_drop,
-                #  tx_bytes, tx_packets, tx_errs, tx_drop)
-                net_rx_bytes += stats[0]
-                net_tx_bytes += stats[4]
+                st = dom.interfaceStats(dev)
+                net_rx_bytes += st[0]
+                net_tx_bytes += st[4]
             except Exception:
                 pass
     except Exception:
         pass
 
-    # ── Compute rates against previous sample ────────────────────────────────
     prev = _vm_samples.get(uuid)
     cpu_pct = disk_r_rate = disk_w_rate = net_rx_rate = net_tx_rate = None
 
     if prev and cpu_ns is not None:
         dt = now - prev['ts']
         if dt > 0:
-            # CPU%: fraction of one vCPU used; multiply by 100 to get %
-            delta_cpu = cpu_ns - prev.get('cpu_ns', cpu_ns)
-            # dt is wall seconds, cpu_ns is nanoseconds → convert
+            delta_cpu   = cpu_ns - prev.get('cpu_ns', cpu_ns)
             try:
-                ncpus = dom.info()[3]  # nrVirtCpu
+                ncpus = dom.info()[3]
             except Exception:
                 ncpus = 1
-            cpu_pct = max(0.0, min(100.0 * ncpus,
-                          (delta_cpu / 1e9) / dt * 100))
+            cpu_pct     = max(0.0, min(100.0 * ncpus, (delta_cpu / 1e9) / dt * 100))
+            disk_r_rate = max(0.0, (disk_r_bytes - prev.get('disk_r', disk_r_bytes)) / dt)
+            disk_w_rate = max(0.0, (disk_w_bytes - prev.get('disk_w', disk_w_bytes)) / dt)
+            net_rx_rate = max(0.0, (net_rx_bytes  - prev.get('net_rx', net_rx_bytes))  / dt)
+            net_tx_rate = max(0.0, (net_tx_bytes  - prev.get('net_tx', net_tx_bytes))  / dt)
 
-            delta_dr = disk_r_bytes - prev.get('disk_r', disk_r_bytes)
-            delta_dw = disk_w_bytes - prev.get('disk_w', disk_w_bytes)
-            delta_nr = net_rx_bytes  - prev.get('net_rx', net_rx_bytes)
-            delta_nt = net_tx_bytes  - prev.get('net_tx', net_tx_bytes)
-
-            disk_r_rate = max(0, delta_dr / dt)
-            disk_w_rate = max(0, delta_dw / dt)
-            net_rx_rate = max(0, delta_nr / dt)
-            net_tx_rate = max(0, delta_nt / dt)
-
-    # Store new sample
     _vm_samples[uuid] = {
         'ts':     now,
         'cpu_ns': cpu_ns or 0,
@@ -343,17 +271,16 @@ def _parse_vm_stats(dom):
     }
 
     return {
-        'uuid':         uuid,
-        'name':         name,
-        'cpu_pct':      round(cpu_pct, 2)      if cpu_pct      is not None else None,
-        'mem_used':     mem_used,
-        'mem_total':    mem_total,
-        'mem_pct':      round(mem_used / mem_total * 100, 1)
-                        if mem_used and mem_total else None,
-        'disk_r_rate':  round(disk_r_rate, 1)  if disk_r_rate  is not None else None,
-        'disk_w_rate':  round(disk_w_rate, 1)  if disk_w_rate  is not None else None,
-        'net_rx_rate':  round(net_rx_rate, 1)  if net_rx_rate  is not None else None,
-        'net_tx_rate':  round(net_tx_rate, 1)  if net_tx_rate  is not None else None,
+        'uuid':        uuid,
+        'name':        dom.name(),
+        'cpu_pct':     round(cpu_pct, 2)     if cpu_pct     is not None else None,
+        'mem_used':    mem_used,
+        'mem_total':   mem_total,
+        'mem_pct':     round(mem_used / mem_total * 100, 1) if mem_used and mem_total else None,
+        'disk_r_rate': round(disk_r_rate, 1) if disk_r_rate is not None else None,
+        'disk_w_rate': round(disk_w_rate, 1) if disk_w_rate is not None else None,
+        'net_rx_rate': round(net_rx_rate, 1) if net_rx_rate is not None else None,
+        'net_tx_rate': round(net_tx_rate, 1) if net_tx_rate is not None else None,
     }
 
 

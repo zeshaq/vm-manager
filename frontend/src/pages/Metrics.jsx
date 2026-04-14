@@ -6,7 +6,7 @@ import {
 import api from '../api'
 import {
   Cpu, MemoryStick, HardDrive, Network, RefreshCw,
-  Activity, Container, AlertCircle, Loader2, TrendingUp, Server
+  Activity, Loader2, TrendingUp, Server
 } from 'lucide-react'
 
 // ── helpers ───────────────────────────────────────────────────────────────────
@@ -298,137 +298,6 @@ function SystemTab({ minutes, refreshMs, notify }) {
   )
 }
 
-// ── Docker metrics tab ────────────────────────────────────────────────────────
-
-function DockerTab({ minutes, refreshMs, notify }) {
-  const [data, setData]       = useState(null)
-  const [loading, setLoading] = useState(true)
-  const timerRef = useRef(null)
-
-  const load = useCallback(async (showSpinner = false) => {
-    if (showSpinner) setLoading(true)
-    try {
-      const r = await api.get(`/metrics/containers?minutes=${minutes}`)
-      setData(r.data)
-    } catch (e) {
-      notify(e.response?.data?.error || 'Failed to load container metrics', 'error')
-    } finally {
-      setLoading(false)
-    }
-  }, [minutes])
-
-  useEffect(() => {
-    load(true)
-    timerRef.current = setInterval(() => load(false), refreshMs)
-    return () => clearInterval(timerRef.current)
-  }, [load, refreshMs])
-
-  if (loading) return (
-    <div className="flex items-center gap-2 text-slate-400 py-16 justify-center">
-      <Loader2 size={20} className="animate-spin" /> Loading container metrics…
-    </div>
-  )
-  if (!data) return null
-
-  const { containers, history } = data
-  const histKeys = Object.keys(history)
-
-  // Build chart data — each container is a series
-  const histPoints = mergeSeries(history)
-
-  return (
-    <div className="space-y-5">
-      {/* Per-container table */}
-      <div className="bg-navy-800 border border-navy-600 rounded-xl overflow-hidden">
-        <div className="px-5 py-4 border-b border-navy-600 flex items-center gap-2">
-          <Container size={15} className="text-sky-400" />
-          <span className="text-slate-300 text-sm font-semibold">Container Resource Usage</span>
-          <span className="text-xs bg-navy-600 text-slate-400 px-2 py-0.5 rounded-full ml-1">{containers.length}</span>
-        </div>
-
-        {containers.length === 0 ? (
-          <div className="flex flex-col items-center py-12 text-slate-500">
-            <Container size={32} className="mb-3 opacity-30" />
-            <p className="text-sm">No container metrics yet — cAdvisor may still be collecting data.</p>
-          </div>
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b border-navy-700 bg-navy-700/40">
-                  <th className="text-left px-5 py-3 text-slate-400 font-medium text-xs">Container</th>
-                  <th className="text-left px-5 py-3 text-slate-400 font-medium text-xs">CPU %</th>
-                  <th className="text-left px-5 py-3 text-slate-400 font-medium text-xs">Memory</th>
-                  <th className="text-left px-5 py-3 text-slate-400 font-medium text-xs">Mem Limit</th>
-                  <th className="text-left px-5 py-3 text-slate-400 font-medium text-xs">Mem %</th>
-                </tr>
-              </thead>
-              <tbody>
-                {containers.map(c => {
-                  const memPct = c.mem_limit && c.mem_bytes
-                    ? (c.mem_bytes / c.mem_limit * 100) : null
-                  return (
-                    <tr key={c.name} className="border-b border-navy-700/50 hover:bg-navy-700/20 transition-colors">
-                      <td className="px-5 py-3 font-mono text-slate-200 text-xs">{c.name}</td>
-                      <td className="px-5 py-3">
-                        <div className="flex items-center gap-2">
-                          <span className="text-slate-200 font-mono text-xs w-12">
-                            {c.cpu_pct != null ? `${c.cpu_pct.toFixed(2)}%` : '—'}
-                          </span>
-                          {c.cpu_pct != null && (
-                            <div className="flex-1 bg-navy-600 rounded-full h-1.5 w-20">
-                              <div className="bg-sky-500 h-1.5 rounded-full"
-                                style={{ width: `${Math.min(c.cpu_pct, 100)}%` }} />
-                            </div>
-                          )}
-                        </div>
-                      </td>
-                      <td className="px-5 py-3 text-slate-300 font-mono text-xs">
-                        {c.mem_bytes != null ? bytes(c.mem_bytes) : '—'}
-                      </td>
-                      <td className="px-5 py-3 text-slate-400 font-mono text-xs">
-                        {c.mem_limit ? bytes(c.mem_limit) : '∞'}
-                      </td>
-                      <td className="px-5 py-3">
-                        {memPct != null ? (
-                          <span className={`text-xs font-mono ${memPct > 85 ? 'text-red-400' : memPct > 65 ? 'text-yellow-400' : 'text-green-400'}`}>
-                            {memPct.toFixed(1)}%
-                          </span>
-                        ) : <span className="text-slate-500 text-xs">—</span>}
-                      </td>
-                    </tr>
-                  )
-                })}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </div>
-
-      {/* CPU history chart for top containers */}
-      {histKeys.length > 0 && (
-        <ChartCard title="CPU % History — Top Containers" icon={Activity}>
-          <ResponsiveContainer width="100%" height={240}>
-            <LineChart data={histPoints}>
-              <CartesianGrid stroke={GRID_STROKE} vertical={false} />
-              <XAxis dataKey="t" tickFormatter={fmtTs} tick={AXIS_STYLE} minTickGap={60} />
-              <YAxis tick={AXIS_STYLE} tickFormatter={v => `${v?.toFixed(1)}%`} width={48} />
-              <Tooltip content={<ChartTooltip formatter={v => `${v?.toFixed(2)}%`} />} />
-              <Legend wrapperStyle={{ fontSize: 10, color: '#94a3b8' }}
-                formatter={v => v.length > 24 ? '…' + v.slice(-22) : v} />
-              {histKeys.map((name, i) => (
-                <Line key={name} type="monotone" dataKey={name}
-                  stroke={CHART_COLORS[i % CHART_COLORS.length]}
-                  strokeWidth={1.5} dot={false} isAnimationActive={false} />
-              ))}
-            </LineChart>
-          </ResponsiveContainer>
-        </ChartCard>
-      )}
-    </div>
-  )
-}
-
 // ── VM metrics tab ────────────────────────────────────────────────────────────
 
 function VMsTab({ refreshMs, notify }) {
@@ -677,9 +546,8 @@ function VMsTab({ refreshMs, notify }) {
 // ── Main page ─────────────────────────────────────────────────────────────────
 
 const TABS = [
-  { id: 'system', label: 'System',  icon: Activity },
-  { id: 'docker', label: 'Docker',  icon: Container },
-  { id: 'vms',    label: 'VMs',     icon: Server },
+  { id: 'system', label: 'System', icon: Activity },
+  { id: 'vms',    label: 'VMs',    icon: Server },
 ]
 
 export default function Metrics() {
@@ -687,7 +555,6 @@ export default function Metrics() {
   const [minutes, setMinutes]   = useState(60)
   const [refreshMs, setRefreshMs] = useState(3000)
   const [toast, setToast]       = useState({ msg: '', type: 'ok' })
-  const [promOk, setPromOk]     = useState(true)
 
   const REFRESH_OPTIONS = [
     { label: '3s',  ms: 3000 },
@@ -699,23 +566,6 @@ export default function Metrics() {
   ]
 
   const notify = (msg, type = 'ok') => setToast({ msg, type })
-
-  // Quick health check
-  useEffect(() => {
-    api.get('/metrics/dashboard?minutes=1')
-      .catch(() => setPromOk(false))
-  }, [])
-
-  if (!promOk) return (
-    <div className="flex flex-col items-center justify-center py-20 text-slate-400">
-      <AlertCircle size={40} className="mb-4 text-red-400" />
-      <h2 className="text-lg font-semibold text-slate-300 mb-2">Prometheus not reachable</h2>
-      <p className="text-sm">Make sure Prometheus is running on localhost:9090</p>
-      <code className="mt-3 bg-navy-800 px-3 py-1.5 rounded text-xs text-green-400">
-        sudo systemctl start prometheus
-      </code>
-    </div>
-  )
 
   return (
     <div className="space-y-5">
@@ -771,7 +621,6 @@ export default function Metrics() {
 
       {/* Tab content — key forces remount on range or refresh change */}
       {tab === 'system' && <SystemTab key={`sys-${minutes}-${refreshMs}`} minutes={minutes} refreshMs={refreshMs} notify={notify} />}
-      {tab === 'docker' && <DockerTab key={`doc-${minutes}-${refreshMs}`} minutes={minutes} refreshMs={refreshMs} notify={notify} />}
       {tab === 'vms'    && <VMsTab   key={`vms-${refreshMs}`}                                refreshMs={refreshMs} notify={notify} />}
 
       {/* Toast */}
