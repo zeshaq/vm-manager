@@ -108,14 +108,15 @@ function PrereqCard({ prereqs }) {
 // ── Create cluster form ───────────────────────────────────────────────────────
 
 const DEFAULT_FORM = {
-  name:         '',
-  k8s_version:  '1.29',
-  cni:          'flannel',
-  worker_count: 1,
-  node_size:    'small',
+  name:            '',
+  k8s_version:     '1.29',
+  cni:             'flannel',
+  worker_count:    1,
+  node_size:       'small',
+  base_image_path: '',
 }
 
-function CreateForm({ options, onCreate, disabled }) {
+function CreateForm({ options, onCreate, disabled, availableImages }) {
   const [form, setForm] = useState(DEFAULT_FORM)
   const [open, setOpen]   = useState(true)
   const [err,  setErr]    = useState('')
@@ -217,6 +218,25 @@ function CreateForm({ options, onCreate, disabled }) {
               </select>
             </div>
           </div>
+
+          {/* Base image */}
+          {availableImages && availableImages.length > 0 && (
+            <div>
+              <label className="block text-xs text-slate-400 mb-1">Base image</label>
+              <select
+                className="w-full bg-navy-700 border border-navy-400 rounded px-3 py-2 text-sm text-slate-100 focus:outline-none focus:border-sky-500"
+                value={form.base_image_path}
+                onChange={e => set('base_image_path', e.target.value)}
+              >
+                <option value="">Default (ubuntu-22.04)</option>
+                {availableImages.map(img => (
+                  <option key={img.id} value={img.path}>
+                    {img.name}{img.version ? ` ${img.version}` : ''} — {img.path.split('/').pop()}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
 
           {/* Summary */}
           <p className="text-slate-500 text-xs">
@@ -436,20 +456,23 @@ export default function Kubernetes() {
   const [clusters,  setClusters]  = useState([])
   const [prereqs,   setPrereqs]   = useState(null)
   const [options,   setOptions]   = useState(null)
+  const [images,    setImages]    = useState([])
   const [loading,   setLoading]   = useState(true)
   const [deploying, setDeploying] = useState(false)
   const [activeJob, setActiveJob] = useState(null)   // { cluster_id, job_id }
 
   const load = useCallback(async () => {
     try {
-      const [c, p, o] = await Promise.all([
+      const [c, p, o, img] = await Promise.all([
         api.get('/k8s/clusters'),
         api.get('/k8s/prereqs'),
         api.get('/k8s/options'),
+        api.get('/images').catch(() => ({ data: { images: [] } })),
       ])
       setClusters(c.data.clusters || [])
       setPrereqs(p.data)
       setOptions(o.data)
+      setImages((img.data.images || []).filter(i => i.status === 'available'))
     } finally {
       setLoading(false)
     }
@@ -495,6 +518,7 @@ export default function Kubernetes() {
         options={options}
         onCreate={handleCreate}
         disabled={deploying || !prereqs?.ready}
+        availableImages={images}
       />
 
       {/* Active job log (just created) */}

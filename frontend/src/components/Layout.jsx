@@ -13,6 +13,7 @@ import {
   Network,
   Files,
   Layers,
+  Image,
 } from 'lucide-react'
 
 
@@ -26,6 +27,7 @@ const navItems = [
   { to: '/docker', label: 'Docker', icon: Container },
   { to: '/network', label: 'Network', icon: Network },
   { to: '/files',      label: 'File Manager', icon: Files },
+  { to: '/images',     label: 'Images',       icon: Image },
   { to: '/kubernetes', label: 'Kubernetes',   icon: Layers },
   { to: '/projects',   label: 'Projects',     icon: FolderOpen },
 ]
@@ -66,6 +68,7 @@ export default function Layout({ children, username, onLogout }) {
     if (p === '/metrics') return 'Metrics'
     if (p === '/network') return 'Network'
     if (p === '/files')      return 'File Manager'
+    if (p === '/images')     return 'Images'
     if (p === '/kubernetes') return 'Kubernetes'
     if (p === '/projects')   return 'Projects'
     return 'Hypercloud'

@@ -19,6 +19,7 @@ from views.network_mgmt import network_bp
 from views.metrics import metrics_bp
 from views.files import files_bp
 from views.kubernetes import k8s_bp
+from views.images import images_bp
 
 from sockets import sock
 
@@ -73,6 +74,7 @@ app.register_blueprint(network_bp)
 app.register_blueprint(metrics_bp)
 app.register_blueprint(files_bp)
 app.register_blueprint(k8s_bp)
+app.register_blueprint(images_bp)
 
 @app.route('/login')
 @app.route('/logout')

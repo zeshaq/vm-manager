@@ -416,8 +416,9 @@ def _deploy(job_id, cluster_id, cfg):
         w_count   = cfg['worker_count']
         size      = NODE_SIZES[cfg['node_size']]
         cpu, ram  = size['cpu'], size['ram_mb']
-        disk_gb   = size['disk_gb']
-        pod_cidr  = CNI_OPTIONS[cni]['pod_cidr']
+        disk_gb        = size['disk_gb']
+        pod_cidr       = CNI_OPTIONS[cni]['pod_cidr']
+        base_img_path  = cfg.get('base_image_path', str(BASE_IMAGE))
         gw        = f'10.0.{sid}.1'
         ctrl_ip   = f'10.0.{sid}.10'
         w_ips     = [f'10.0.{sid}.{11 + i}' for i in range(w_count)]
@@ -455,10 +456,10 @@ def _deploy(job_id, cluster_id, cfg):
             disk_path = str(STORAGE_PATH / f'{node_name}.qcow2')
             iso_path  = str(STORAGE_PATH / f'{node_name}-cidata.iso')
 
-            log(f'  [{role}] Creating disk ({disk_gb}G thin from base image)')
+            log(f'  [{role}] Creating disk ({disk_gb}G thin from {Path(base_img_path).name})')
             subprocess.run(
                 ['qemu-img', 'create', '-f', 'qcow2', '-F', 'qcow2',
-                 '-b', str(BASE_IMAGE), disk_path, f'{disk_gb}G'],
+                 '-b', base_img_path, disk_path, f'{disk_gb}G'],
                 check=True, capture_output=True,
             )
 
@@ -676,8 +677,10 @@ def create_cluster():
         return jsonify({'error': 'worker_count must be 0-5'}), 400
     if node_size not in NODE_SIZES:
         return jsonify({'error': 'Invalid node_size'}), 400
-    if not BASE_IMAGE.exists():
-        return jsonify({'error': f'Base image not found at {BASE_IMAGE}'}), 422
+    # Base image: accept explicit path from registry, fall back to default
+    base_image_path = data.get('base_image_path', '').strip() or str(BASE_IMAGE)
+    if not Path(base_image_path).exists():
+        return jsonify({'error': f'Base image not found: {base_image_path}'}), 422
 
     import uuid as _uuid
     cluster_id  = _uuid.uuid4().hex[:12]
@@ -685,13 +688,14 @@ def create_cluster():
     subnet_idx  = _next_subnet_index()
 
     cfg = {
-        'k8s_version': k8s_ver,
-        'cni':         cni,
-        'worker_count': w_count,
-        'node_size':   node_size,
-        'node_cpu':    NODE_SIZES[node_size]['cpu'],
-        'node_ram_mb': NODE_SIZES[node_size]['ram_mb'],
-        'pod_cidr':    CNI_OPTIONS[cni]['pod_cidr'],
+        'k8s_version':    k8s_ver,
+        'cni':            cni,
+        'worker_count':   w_count,
+        'node_size':      node_size,
+        'node_cpu':       NODE_SIZES[node_size]['cpu'],
+        'node_ram_mb':    NODE_SIZES[node_size]['ram_mb'],
+        'pod_cidr':       CNI_OPTIONS[cni]['pod_cidr'],
+        'base_image_path': base_image_path,
     }
 
     cluster = {
