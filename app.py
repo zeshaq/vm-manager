@@ -1,5 +1,4 @@
-from flask import Flask, session, redirect, url_for, request, render_template, send_from_directory
-import simplepam
+from flask import Flask, request, render_template, send_from_directory
 import os
 import psutil
 import libvirt
@@ -32,22 +31,11 @@ app.register_blueprint(dashboard_bp)
 app.register_blueprint(projects_bp)
 app.register_blueprint(api_bp)
 
-@app.route('/login', methods=['GET', 'POST'])
-def login():
-    if request.method == 'POST':
-        username = request.form['username']
-        password = request.form['password']
-        if simplepam.authenticate(username, password):
-            session['username'] = username
-            return redirect(url_for('index'))
-        else:
-            return render_template('login.html', error='Invalid credentials')
-    return render_template('login.html')
-
+@app.route('/login')
 @app.route('/logout')
-def logout():
-    session.pop('username', None)
-    return redirect(url_for('login'))
+def serve_react_auth():
+    build_dir = os.path.join(os.path.dirname(__file__), 'frontend', 'dist')
+    return send_from_directory(build_dir, 'index.html')
 
 # Simple route for the root URL
 @app.route('/')
