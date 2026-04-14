@@ -1,20 +1,25 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useRef } from 'react'
 import { useParams, Link, useNavigate } from 'react-router-dom'
 import {
   Play, Square, Pencil, RefreshCw, HardDrive, Network, Cpu, Camera,
-  Trash2, PlusCircle, Monitor, Terminal, ChevronUp, ChevronDown, Save
+  Trash2, PlusCircle, Monitor, Terminal, Save, ChevronDown, X
 } from 'lucide-react'
 import api from '../api'
 
+/* ── tiny helpers ─────────────────────────────────────────────────────── */
+
 function StateBadge({ state }) {
-  const variants = {
+  const v = {
     Running: 'bg-green-900 text-green-300',
     Shutoff: 'bg-navy-500 text-slate-400',
     Paused: 'bg-yellow-900 text-yellow-300',
     Crashed: 'bg-red-900 text-red-300',
   }
-  const cls = variants[state] || 'bg-yellow-900 text-yellow-300'
-  return <span className={`px-2.5 py-0.5 rounded-full text-xs font-medium ${cls}`}>{state}</span>
+  return (
+    <span className={`px-2.5 py-0.5 rounded-full text-xs font-medium ${v[state] || 'bg-yellow-900 text-yellow-300'}`}>
+      {state}
+    </span>
+  )
 }
 
 function Section({ title, icon: Icon, children }) {
@@ -28,22 +33,110 @@ function Section({ title, icon: Icon, children }) {
   )
 }
 
+function inputCls(extra = '') {
+  return `bg-navy-800 border border-navy-400 text-slate-200 focus:border-sky-500 focus:outline-none rounded-md px-3 py-2 text-sm ${extra}`
+}
+
+/* ── disk-path autosuggest ───────────────────────────────────────────── */
+function DiskPathInput({ value, onChange, images }) {
+  const [open, setOpen] = useState(false)
+  const ref = useRef(null)
+
+  const filtered = images.filter(f =>
+    f.path.toLowerCase().includes(value.toLowerCase()) ||
+    f.name.toLowerCase().includes(value.toLowerCase())
+  )
+
+  useEffect(() => {
+    const handler = e => { if (ref.current && !ref.current.contains(e.target)) setOpen(false) }
+    document.addEventListener('mousedown', handler)
+    return () => document.removeEventListener('mousedown', handler)
+  }, [])
+
+  return (
+    <div className="relative flex-1" ref={ref}>
+      <input
+        value={value}
+        onChange={e => { onChange(e.target.value); setOpen(true) }}
+        onFocus={() => setOpen(true)}
+        placeholder="Type or select a disk image path…"
+        className={inputCls('w-full pr-8')}
+      />
+      <ChevronDown size={14} className="absolute right-2.5 top-3 text-slate-500 pointer-events-none" />
+      {open && filtered.length > 0 && (
+        <ul className="absolute z-50 left-0 right-0 top-full mt-1 bg-navy-800 border border-navy-400 rounded-md shadow-xl max-h-52 overflow-y-auto">
+          {filtered.map(f => (
+            <li
+              key={f.path}
+              onMouseDown={() => { onChange(f.path); setOpen(false) }}
+              className="px-3 py-2 hover:bg-navy-600 cursor-pointer"
+            >
+              <div className="text-slate-200 text-sm">{f.name}</div>
+              <div className="text-slate-500 text-xs font-mono">{f.path} · {f.size} · {f.type}</div>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  )
+}
+
+/* ── network source dropdown ─────────────────────────────────────────── */
+function NetworkSourceSelect({ mode, value, onChange, networks, bridges }) {
+  if (mode === 'bridge') {
+    return (
+      <select value={value} onChange={e => onChange(e.target.value)} className={inputCls('flex-1')}>
+        <option value="">Select bridge…</option>
+        {bridges.map(b => <option key={b} value={b}>{b}</option>)}
+        <option value="__custom__">Custom…</option>
+      </select>
+    )
+  }
+  return (
+    <select value={value} onChange={e => onChange(e.target.value)} className={inputCls('flex-1')}>
+      <option value="">Select network…</option>
+      {networks.map(n => (
+        <option key={n.name} value={n.name}>
+          {n.name}{n.active ? '' : ' (inactive)'}
+        </option>
+      ))}
+      <option value="__custom__">Custom…</option>
+    </select>
+  )
+}
+
+/* ══════════════════════════════════════════════════════════════════════ */
 export default function VMDetail() {
   const { uuid } = useParams()
-  const navigate = useNavigate()
   const [vm, setVm] = useState(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
 
-  // Form states
-  const [newDisk, setNewDisk] = useState('')
-  const [newIface, setNewIface] = useState({ mode: 'nat', source: 'default' })
+  // supporting data
+  const [images, setImages] = useState([])
+  const [networks, setNetworks] = useState([])
+  const [bridges, setBridges] = useState([])
+
+  // form states — existing disk attach
+  const [diskPath, setDiskPath] = useState('')
+
+  // form states — create & attach new disk
+  const [showCreate, setShowCreate] = useState(false)
+  const [newDisk, setNewDisk] = useState({ name: '', size: '', format: 'qcow2' })
+
+  // network
+  const [newIface, setNewIface] = useState({ mode: 'nat', source: '' })
+  const [customSource, setCustomSource] = useState('')
+
+  // PCI / snapshots / boot
   const [newPci, setNewPci] = useState('')
   const [newSnap, setNewSnap] = useState('')
   const [boot1, setBoot1] = useState('')
   const [boot2, setBoot2] = useState('')
+
   const [saving, setSaving] = useState({})
 
+  /* fetch VM details */
   const fetchVM = () => {
     setLoading(true)
     api.get(`/vms/${uuid}`)
@@ -56,24 +149,40 @@ export default function VMDetail() {
       .finally(() => setLoading(false))
   }
 
-  useEffect(() => { fetchVM() }, [uuid])
+  /* fetch supporting data once */
+  useEffect(() => {
+    fetchVM()
+    api.get('/storage/images').then(r => setImages(r.data.files || [])).catch(() => {})
+    api.get('/networks').then(r => {
+      setNetworks(r.data.networks || [])
+      setBridges(r.data.bridges || [])
+      // pre-select first available network
+      const firstNet = (r.data.networks || [])[0]?.name || 'default'
+      setNewIface(p => ({ ...p, source: firstNet }))
+    }).catch(() => {})
+  }, [uuid])
 
+  /* generic action wrapper */
   const act = async (key, fn) => {
     setSaving(p => ({ ...p, [key]: true }))
     try { await fn(); fetchVM() }
-    catch (e) { alert(e.response?.data?.error || 'Error') }
-    setSaving(p => ({ ...p, [key]: false }))
+    catch (e) { alert(e.response?.data?.error || e.message || 'Error') }
+    finally { setSaving(p => ({ ...p, [key]: false })) }
   }
 
-  if (loading) return <div className="text-sky-400 text-center py-20">Loading VM details...</div>
-  if (error) return <div className="text-red-400 text-center py-20">{error}</div>
-  if (!vm) return null
+  /* resolved network source (handle custom input) */
+  const resolvedSource = newIface.source === '__custom__' ? customSource : newIface.source
+
+  if (loading) return <div className="text-sky-400 text-center py-20">Loading VM details…</div>
+  if (error)   return <div className="text-red-400 text-center py-20">{error}</div>
+  if (!vm)     return null
 
   const bootOptions = vm.boot_devices || []
 
   return (
     <div className="space-y-5">
-      {/* Header */}
+
+      {/* ── Header ─────────────────────────────────────────────────── */}
       <div className="bg-navy-700 border border-navy-400 rounded-xl p-5">
         <div className="flex flex-wrap items-start gap-4 justify-between">
           <div>
@@ -90,7 +199,7 @@ export default function VMDetail() {
                 <Play size={14} /> Start
               </button>
             ) : (
-              <button onClick={() => { if(confirm('Force stop?')) act('stop', () => api.post(`/vms/${uuid}/stop`)) }}
+              <button onClick={() => { if (confirm('Force stop?')) act('stop', () => api.post(`/vms/${uuid}/stop`)) }}
                 className="flex items-center gap-2 bg-yellow-800 hover:bg-yellow-700 text-yellow-300 px-3 py-2 rounded-md text-sm">
                 <Square size={14} /> Stop
               </button>
@@ -114,13 +223,12 @@ export default function VMDetail() {
           </div>
         </div>
 
-        {/* Resource summary */}
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mt-5">
           {[
-            { label: 'Memory', value: `${vm.memory_mb} MB` },
-            { label: 'vCPUs', value: vm.vcpus },
-            { label: 'OS Type', value: vm.os_type || 'N/A' },
-            { label: 'Project', value: vm.project || 'N/A' },
+            { label: 'Memory',   value: `${vm.memory_mb} MB` },
+            { label: 'vCPUs',    value: vm.vcpus },
+            { label: 'OS Type',  value: vm.os_type || 'N/A' },
+            { label: 'Project',  value: vm.project || 'N/A' },
           ].map(item => (
             <div key={item.label} className="bg-navy-800 rounded-lg px-4 py-3">
               <div className="text-slate-400 text-xs mb-1">{item.label}</div>
@@ -130,7 +238,7 @@ export default function VMDetail() {
         </div>
       </div>
 
-      {/* Disks */}
+      {/* ── Disks ──────────────────────────────────────────────────── */}
       <Section title="Disks" icon={HardDrive}>
         {vm.disks?.length > 0 ? (
           <table className="w-full text-sm mb-4">
@@ -147,13 +255,14 @@ export default function VMDetail() {
               {vm.disks.map(d => (
                 <tr key={d.target} className="border-b border-navy-500 hover:bg-navy-600">
                   <td className="px-3 py-2 font-mono text-slate-300">{d.target}</td>
-                  <td className="px-3 py-2 text-slate-400 text-xs truncate max-w-xs">{d.file}</td>
+                  <td className="px-3 py-2 text-slate-400 text-xs truncate max-w-xs" title={d.file}>{d.file}</td>
                   <td className="px-3 py-2 text-slate-400">{d.type}</td>
                   <td className="px-3 py-2 text-slate-400">{d.device}</td>
                   <td className="px-3 py-2 text-right">
-                    <button onClick={() => act(`disk-${d.target}`, () => api.delete(`/vms/${uuid}/disks`, { data: { target_dev: d.target } }))}
+                    <button
+                      onClick={() => act(`disk-${d.target}`, () => api.delete(`/vms/${uuid}/disks`, { data: { target_dev: d.target } }))}
                       disabled={saving[`disk-${d.target}`]}
-                      className="p-1.5 rounded bg-red-900/60 hover:bg-red-800 text-red-400 transition-colors disabled:opacity-50">
+                      className="p-1.5 rounded bg-red-900/60 hover:bg-red-800 text-red-400 disabled:opacity-50">
                       <Trash2 size={13} />
                     </button>
                   </td>
@@ -164,24 +273,92 @@ export default function VMDetail() {
         ) : (
           <p className="text-slate-400 text-sm mb-4">No disks attached.</p>
         )}
-        <div className="flex gap-2">
-          <input
-            value={newDisk}
-            onChange={e => setNewDisk(e.target.value)}
-            placeholder="File path (e.g. /var/lib/libvirt/images/disk.qcow2)"
-            className="flex-1 bg-navy-800 border border-navy-400 text-slate-200 focus:border-sky-500 focus:outline-none rounded-md px-3 py-2 text-sm"
-          />
+
+        {/* Tab toggle: attach existing / create new */}
+        <div className="flex gap-1 mb-3">
           <button
-            onClick={() => { if (!newDisk) return; act('add-disk', () => api.post(`/vms/${uuid}/disks`, { file_path: newDisk })); setNewDisk('') }}
-            disabled={saving['add-disk']}
-            className="flex items-center gap-1.5 bg-sky-500 hover:bg-sky-400 text-white px-3 py-2 rounded-md text-sm disabled:opacity-50"
-          >
-            <PlusCircle size={14} /> Add Disk
+            onClick={() => setShowCreate(false)}
+            className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${!showCreate ? 'bg-sky-600 text-white' : 'bg-navy-800 text-slate-400 hover:text-slate-200'}`}>
+            Attach Existing
+          </button>
+          <button
+            onClick={() => setShowCreate(true)}
+            className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${showCreate ? 'bg-sky-600 text-white' : 'bg-navy-800 text-slate-400 hover:text-slate-200'}`}>
+            Create &amp; Attach New
           </button>
         </div>
+
+        {!showCreate ? (
+          /* ── Attach existing ── */
+          <div className="flex gap-2">
+            <DiskPathInput value={diskPath} onChange={setDiskPath} images={images} />
+            <button
+              onClick={() => {
+                if (!diskPath) return
+                act('add-disk', () => api.post(`/vms/${uuid}/disks`, { file_path: diskPath }))
+                setDiskPath('')
+              }}
+              disabled={saving['add-disk'] || !diskPath}
+              className="flex items-center gap-1.5 bg-sky-500 hover:bg-sky-400 text-white px-3 py-2 rounded-md text-sm disabled:opacity-50">
+              <PlusCircle size={14} /> Attach
+            </button>
+          </div>
+        ) : (
+          /* ── Create & attach new disk ── */
+          <div className="bg-navy-800 border border-navy-500 rounded-lg p-4 space-y-3">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+              <div>
+                <label className="block text-xs text-slate-400 mb-1">Disk name</label>
+                <input
+                  value={newDisk.name}
+                  onChange={e => setNewDisk(p => ({ ...p, name: e.target.value }))}
+                  placeholder="e.g. myvm-data"
+                  className={inputCls('w-full')}
+                />
+              </div>
+              <div>
+                <label className="block text-xs text-slate-400 mb-1">Size (GB)</label>
+                <input
+                  type="number" min="1"
+                  value={newDisk.size}
+                  onChange={e => setNewDisk(p => ({ ...p, size: e.target.value }))}
+                  placeholder="20"
+                  className={inputCls('w-full')}
+                />
+              </div>
+              <div>
+                <label className="block text-xs text-slate-400 mb-1">Format</label>
+                <select
+                  value={newDisk.format}
+                  onChange={e => setNewDisk(p => ({ ...p, format: e.target.value }))}
+                  className={inputCls('w-full')}>
+                  <option value="qcow2">qcow2 (recommended)</option>
+                  <option value="raw">raw</option>
+                </select>
+              </div>
+            </div>
+            <div className="flex gap-2">
+              <button
+                onClick={() => {
+                  if (!newDisk.name || !newDisk.size) return
+                  act('create-disk', () => api.post(`/vms/${uuid}/disks/create`, newDisk))
+                  setNewDisk({ name: '', size: '', format: 'qcow2' })
+                  setShowCreate(false)
+                }}
+                disabled={saving['create-disk'] || !newDisk.name || !newDisk.size}
+                className="flex items-center gap-1.5 bg-sky-500 hover:bg-sky-400 text-white px-4 py-2 rounded-md text-sm disabled:opacity-50">
+                <HardDrive size={14} /> {saving['create-disk'] ? 'Creating…' : 'Create & Attach'}
+              </button>
+              <button onClick={() => setShowCreate(false)}
+                className="flex items-center gap-1.5 bg-navy-600 hover:bg-navy-500 border border-navy-400 text-slate-300 px-3 py-2 rounded-md text-sm">
+                <X size={14} /> Cancel
+              </button>
+            </div>
+          </div>
+        )}
       </Section>
 
-      {/* Network Interfaces */}
+      {/* ── Network Interfaces ─────────────────────────────────────── */}
       <Section title="Network Interfaces" icon={Network}>
         {vm.interfaces?.length > 0 ? (
           <table className="w-full text-sm mb-4">
@@ -189,7 +366,7 @@ export default function VMDetail() {
               <tr className="bg-navy-800 text-sky-400">
                 <th className="px-3 py-2 text-left">MAC</th>
                 <th className="px-3 py-2 text-left">Model</th>
-                <th className="px-3 py-2 text-left">Network</th>
+                <th className="px-3 py-2 text-left">Network / Bridge</th>
                 <th className="px-3 py-2 text-left">IPs</th>
                 <th className="px-3 py-2"></th>
               </tr>
@@ -202,9 +379,10 @@ export default function VMDetail() {
                   <td className="px-3 py-2 text-slate-400">{iface.network}</td>
                   <td className="px-3 py-2 text-slate-400 text-xs">{iface.ips?.join(', ') || '—'}</td>
                   <td className="px-3 py-2 text-right">
-                    <button onClick={() => act(`iface-${iface.mac}`, () => api.delete(`/vms/${uuid}/interfaces`, { data: { mac: iface.mac } }))}
+                    <button
+                      onClick={() => act(`iface-${iface.mac}`, () => api.delete(`/vms/${uuid}/interfaces`, { data: { mac: iface.mac } }))}
                       disabled={saving[`iface-${iface.mac}`]}
-                      className="p-1.5 rounded bg-red-900/60 hover:bg-red-800 text-red-400 transition-colors disabled:opacity-50">
+                      className="p-1.5 rounded bg-red-900/60 hover:bg-red-800 text-red-400 disabled:opacity-50">
                       <Trash2 size={13} />
                     </button>
                   </td>
@@ -215,32 +393,67 @@ export default function VMDetail() {
         ) : (
           <p className="text-slate-400 text-sm mb-4">No network interfaces.</p>
         )}
-        <div className="flex gap-2 flex-wrap">
-          <select
-            value={newIface.mode}
-            onChange={e => setNewIface(p => ({ ...p, mode: e.target.value }))}
-            className="bg-navy-800 border border-navy-400 text-slate-200 focus:border-sky-500 focus:outline-none rounded-md px-3 py-2 text-sm"
-          >
-            <option value="nat">NAT</option>
-            <option value="bridge">Bridge</option>
-          </select>
-          <input
-            value={newIface.source}
-            onChange={e => setNewIface(p => ({ ...p, source: e.target.value }))}
-            placeholder={newIface.mode === 'bridge' ? 'Bridge name (e.g. br0)' : 'Network name (e.g. default)'}
-            className="flex-1 bg-navy-800 border border-navy-400 text-slate-200 focus:border-sky-500 focus:outline-none rounded-md px-3 py-2 text-sm"
-          />
+
+        <div className="flex gap-2 flex-wrap items-end">
+          {/* Mode selector */}
+          <div>
+            <label className="block text-xs text-slate-400 mb-1">Type</label>
+            <select
+              value={newIface.mode}
+              onChange={e => {
+                const mode = e.target.value
+                const defaultSrc = mode === 'bridge'
+                  ? (bridges[0] || '')
+                  : (networks[0]?.name || 'default')
+                setNewIface({ mode, source: defaultSrc })
+                setCustomSource('')
+              }}
+              className={inputCls()}>
+              <option value="nat">NAT / Virtual Network</option>
+              <option value="bridge">Bridge</option>
+            </select>
+          </div>
+
+          {/* Source dropdown */}
+          <div className="flex-1 min-w-36">
+            <label className="block text-xs text-slate-400 mb-1">
+              {newIface.mode === 'bridge' ? 'Bridge interface' : 'Network'}
+            </label>
+            <NetworkSourceSelect
+              mode={newIface.mode}
+              value={newIface.source}
+              onChange={v => { setNewIface(p => ({ ...p, source: v })); setCustomSource('') }}
+              networks={networks}
+              bridges={bridges}
+            />
+          </div>
+
+          {/* Custom input if "Custom…" chosen */}
+          {newIface.source === '__custom__' && (
+            <div className="flex-1 min-w-36">
+              <label className="block text-xs text-slate-400 mb-1">Custom name</label>
+              <input
+                value={customSource}
+                onChange={e => setCustomSource(e.target.value)}
+                placeholder={newIface.mode === 'bridge' ? 'br0' : 'mynet'}
+                className={inputCls('w-full')}
+              />
+            </div>
+          )}
+
           <button
-            onClick={() => act('add-iface', () => api.post(`/vms/${uuid}/interfaces`, newIface))}
-            disabled={saving['add-iface']}
-            className="flex items-center gap-1.5 bg-sky-500 hover:bg-sky-400 text-white px-3 py-2 rounded-md text-sm disabled:opacity-50"
-          >
+            onClick={() => act('add-iface', () => api.post(`/vms/${uuid}/interfaces`, {
+              mode: newIface.mode,
+              source: resolvedSource,
+            }))}
+            disabled={saving['add-iface'] || !resolvedSource}
+            className="flex items-center gap-1.5 bg-sky-500 hover:bg-sky-400 text-white px-3 py-2 rounded-md text-sm disabled:opacity-50 self-end">
             <PlusCircle size={14} /> Add
           </button>
         </div>
       </Section>
 
-      {/* PCI Devices */}
+      {/* ── PCI Passthrough ────────────────────────────────────────── */}
       <Section title="PCI Passthrough Devices" icon={Cpu}>
         {vm.host_devices?.length > 0 ? (
           <div className="space-y-2 mb-4">
@@ -250,9 +463,10 @@ export default function VMDetail() {
                   <div className="text-slate-200 text-sm">{dev.name}</div>
                   <div className="text-slate-500 text-xs font-mono">{dev.pci_id}</div>
                 </div>
-                <button onClick={() => act(`dev-${dev.pci_id}`, () => api.delete(`/vms/${uuid}/devices`, { data: { pci_id: dev.pci_id } }))}
+                <button
+                  onClick={() => act(`dev-${dev.pci_id}`, () => api.delete(`/vms/${uuid}/devices`, { data: { pci_id: dev.pci_id } }))}
                   disabled={saving[`dev-${dev.pci_id}`]}
-                  className="p-1.5 rounded bg-red-900/60 hover:bg-red-800 text-red-400 transition-colors disabled:opacity-50">
+                  className="p-1.5 rounded bg-red-900/60 hover:bg-red-800 text-red-400 disabled:opacity-50">
                   <Trash2 size={13} />
                 </button>
               </div>
@@ -266,60 +480,46 @@ export default function VMDetail() {
             <select
               value={newPci}
               onChange={e => setNewPci(e.target.value)}
-              className="flex-1 bg-navy-800 border border-navy-400 text-slate-200 focus:border-sky-500 focus:outline-none rounded-md px-3 py-2 text-sm"
-            >
-              <option value="">Select device to attach...</option>
+              className={inputCls('flex-1')}>
+              <option value="">Select device to attach…</option>
               {vm.available_devices.map(d => (
-                <option key={d.pci_id} value={d.pci_id}>{d.name} ({d.pci_id})</option>
+                <option key={d.pci_id} value={d.pci_id}>
+                  {d.name} ({d.pci_id}){d.iommu_group ? ` · IOMMU ${d.iommu_group}` : ''}
+                </option>
               ))}
             </select>
             <button
               onClick={() => { if (!newPci) return; act('add-dev', () => api.post(`/vms/${uuid}/devices`, { pci_id: newPci })); setNewPci('') }}
               disabled={saving['add-dev'] || !newPci}
-              className="flex items-center gap-1.5 bg-sky-500 hover:bg-sky-400 text-white px-3 py-2 rounded-md text-sm disabled:opacity-50"
-            >
+              className="flex items-center gap-1.5 bg-sky-500 hover:bg-sky-400 text-white px-3 py-2 rounded-md text-sm disabled:opacity-50">
               <PlusCircle size={14} /> Attach
             </button>
           </div>
         )}
       </Section>
 
-      {/* Boot Order */}
-      <Section title="Boot Order" icon={ChevronUp}>
+      {/* ── Boot Order ─────────────────────────────────────────────── */}
+      <Section title="Boot Order" icon={Save}>
         <div className="flex flex-wrap gap-4 items-end">
-          <div>
-            <label className="block text-xs text-slate-400 mb-1">Boot 1</label>
-            <select
-              value={boot1}
-              onChange={e => setBoot1(e.target.value)}
-              className="bg-navy-800 border border-navy-400 text-slate-200 focus:border-sky-500 focus:outline-none rounded-md px-3 py-2 text-sm"
-            >
-              <option value="">None</option>
-              {bootOptions.map(o => <option key={o.value} value={o.value}>{o.text}</option>)}
-            </select>
-          </div>
-          <div>
-            <label className="block text-xs text-slate-400 mb-1">Boot 2</label>
-            <select
-              value={boot2}
-              onChange={e => setBoot2(e.target.value)}
-              className="bg-navy-800 border border-navy-400 text-slate-200 focus:border-sky-500 focus:outline-none rounded-md px-3 py-2 text-sm"
-            >
-              <option value="">None</option>
-              {bootOptions.map(o => <option key={o.value} value={o.value}>{o.text}</option>)}
-            </select>
-          </div>
+          {[['Boot 1', boot1, setBoot1], ['Boot 2', boot2, setBoot2]].map(([label, val, set]) => (
+            <div key={label}>
+              <label className="block text-xs text-slate-400 mb-1">{label}</label>
+              <select value={val} onChange={e => set(e.target.value)} className={inputCls()}>
+                <option value="">None</option>
+                {bootOptions.map(o => <option key={o.value} value={o.value}>{o.text}</option>)}
+              </select>
+            </div>
+          ))}
           <button
             onClick={() => act('boot', () => api.put(`/vms/${uuid}/boot`, { boot1, boot2 }))}
             disabled={saving['boot']}
-            className="flex items-center gap-1.5 bg-sky-500 hover:bg-sky-400 text-white px-4 py-2 rounded-md text-sm disabled:opacity-50"
-          >
+            className="flex items-center gap-1.5 bg-sky-500 hover:bg-sky-400 text-white px-4 py-2 rounded-md text-sm disabled:opacity-50">
             <Save size={14} /> Save Boot Order
           </button>
         </div>
       </Section>
 
-      {/* Snapshots */}
+      {/* ── Snapshots ──────────────────────────────────────────────── */}
       <Section title="Snapshots" icon={Camera}>
         {vm.snapshots?.length > 0 ? (
           <div className="space-y-2 mb-4">
@@ -327,14 +527,16 @@ export default function VMDetail() {
               <div key={snap.name} className="flex items-center justify-between bg-navy-800 rounded-lg px-4 py-2.5">
                 <span className="text-slate-200 text-sm font-medium">{snap.name}</span>
                 <div className="flex gap-2">
-                  <button onClick={() => act(`revert-${snap.name}`, () => api.post(`/vms/${uuid}/snapshots/${snap.name}/revert`))}
+                  <button
+                    onClick={() => act(`revert-${snap.name}`, () => api.post(`/vms/${uuid}/snapshots/${snap.name}/revert`))}
                     disabled={saving[`revert-${snap.name}`]}
                     className="flex items-center gap-1 bg-navy-500 hover:bg-navy-400 border border-navy-300 text-slate-300 px-2.5 py-1.5 rounded text-xs disabled:opacity-50">
                     Revert
                   </button>
-                  <button onClick={() => act(`del-snap-${snap.name}`, () => api.delete(`/vms/${uuid}/snapshots/${snap.name}`))}
+                  <button
+                    onClick={() => act(`del-snap-${snap.name}`, () => api.delete(`/vms/${uuid}/snapshots/${snap.name}`))}
                     disabled={saving[`del-snap-${snap.name}`]}
-                    className="p-1.5 rounded bg-red-900/60 hover:bg-red-800 text-red-400 transition-colors disabled:opacity-50">
+                    className="p-1.5 rounded bg-red-900/60 hover:bg-red-800 text-red-400 disabled:opacity-50">
                     <Trash2 size={13} />
                   </button>
                 </div>
@@ -349,13 +551,12 @@ export default function VMDetail() {
             value={newSnap}
             onChange={e => setNewSnap(e.target.value)}
             placeholder="Snapshot name"
-            className="flex-1 bg-navy-800 border border-navy-400 text-slate-200 focus:border-sky-500 focus:outline-none rounded-md px-3 py-2 text-sm"
+            className={inputCls('flex-1')}
           />
           <button
             onClick={() => { if (!newSnap) return; act('add-snap', () => api.post(`/vms/${uuid}/snapshots`, { snapshot_name: newSnap })); setNewSnap('') }}
             disabled={saving['add-snap']}
-            className="flex items-center gap-1.5 bg-sky-500 hover:bg-sky-400 text-white px-3 py-2 rounded-md text-sm disabled:opacity-50"
-          >
+            className="flex items-center gap-1.5 bg-sky-500 hover:bg-sky-400 text-white px-3 py-2 rounded-md text-sm disabled:opacity-50">
             <Camera size={14} /> Create
           </button>
         </div>

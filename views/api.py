@@ -1079,6 +1079,141 @@ def delete_file():
     return jsonify({'success': True})
 
 
+@api_bp.route('/storage/images', methods=['GET'])
+def list_storage_images():
+    """Return just the list of image files — used for disk autosuggest."""
+    err = require_auth()
+    if err:
+        return err
+
+    files = []
+    if os.path.exists(STORAGE_PATH):
+        try:
+            for filename in sorted(os.listdir(STORAGE_PATH)):
+                full_path = os.path.join(STORAGE_PATH, filename)
+                if os.path.isfile(full_path):
+                    ext = filename.split('.')[-1].lower() if '.' in filename else 'raw'
+                    stats = os.stat(full_path)
+                    files.append({
+                        'name': filename,
+                        'path': full_path,
+                        'size': get_human_readable_size(stats.st_size),
+                        'type': ext,
+                    })
+        except Exception as e:
+            return jsonify({'error': str(e)}), 500
+
+    return jsonify({'files': files})
+
+
+@api_bp.route('/networks', methods=['GET'])
+def list_networks():
+    """Return libvirt virtual networks and host bridge interfaces."""
+    err = require_auth()
+    if err:
+        return err
+
+    networks = []
+    bridges = []
+
+    conn = get_db_connection()
+    if conn:
+        try:
+            for net in conn.listAllNetworks(0):
+                networks.append({
+                    'name': net.name(),
+                    'active': net.isActive() == 1,
+                    'autostart': net.autostart() == 1,
+                })
+        except libvirt.libvirtError:
+            pass
+        finally:
+            conn.close()
+
+    # Detect host bridge interfaces from /sys/class/net
+    try:
+        for iface in sorted(os.listdir('/sys/class/net')):
+            bridge_path = f'/sys/class/net/{iface}/bridge'
+            if os.path.isdir(bridge_path):
+                bridges.append(iface)
+    except Exception:
+        pass
+
+    return jsonify({'networks': networks, 'bridges': bridges})
+
+
+@api_bp.route('/vms/<uuid>/disks/create', methods=['POST'])
+def create_and_attach_disk(uuid):
+    """Create a new qcow2 image and immediately attach it to the VM."""
+    err = require_auth()
+    if err:
+        return err
+
+    data = request.get_json() or {}
+    name = data.get('name', '').strip()
+    size_gb = data.get('size')
+    fmt = data.get('format', 'qcow2')
+
+    if not name or not size_gb:
+        return jsonify({'error': 'name and size are required'}), 400
+
+    safe_name = secure_filename(name)
+    if not safe_name.endswith(f'.{fmt}'):
+        safe_name += f'.{fmt}'
+
+    full_path = os.path.join(STORAGE_PATH, safe_name)
+    if os.path.exists(full_path):
+        return jsonify({'error': f'File already exists: {full_path}'}), 409
+
+    # Create the disk image
+    try:
+        subprocess.run(
+            ['qemu-img', 'create', '-f', fmt, full_path, f'{size_gb}G'],
+            check=True, capture_output=True
+        )
+    except subprocess.CalledProcessError as e:
+        return jsonify({'error': f'qemu-img failed: {e.stderr.decode()}'}), 500
+
+    # Attach it to the VM
+    conn = get_db_connection()
+    if not conn:
+        return jsonify({'error': 'Could not connect to hypervisor'}), 500
+
+    try:
+        dom = conn.lookupByUUIDString(uuid)
+        xml_str = dom.XMLDesc(libvirt.VIR_DOMAIN_XML_INACTIVE)
+        tree = ET.fromstring(xml_str)
+
+        existing_devs = {d.find('target').get('dev') for d in tree.findall('devices/disk') if d.find('target') is not None}
+
+        prefix = 'sd' if fmt == 'raw' else 'vd'
+        target_dev = next(
+            (f"{prefix}{c}" for c in 'abcdefghijklmnopqrstuvwxyz' if f"{prefix}{c}" not in existing_devs),
+            None
+        )
+        if not target_dev:
+            return jsonify({'error': 'No available device names'}), 500
+
+        driver_type = 'raw' if fmt == 'raw' else 'qcow2'
+        disk_xml = f"""
+        <disk type='file' device='disk'>
+          <driver name='qemu' type='{driver_type}'/>
+          <source file='{full_path}'/>
+          <target dev='{target_dev}' bus='virtio'/>
+        </disk>
+        """
+        flags = libvirt.VIR_DOMAIN_AFFECT_CONFIG
+        if dom.isActive():
+            flags |= libvirt.VIR_DOMAIN_AFFECT_LIVE
+        dom.attachDeviceFlags(disk_xml, flags)
+        return jsonify({'success': True, 'path': full_path, 'target': target_dev})
+
+    except libvirt.libvirtError as e:
+        return jsonify({'error': str(e)}), 500
+    finally:
+        conn.close()
+
+
 # ---------------------------------------------------------------------------
 # Projects
 # ---------------------------------------------------------------------------
