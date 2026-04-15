@@ -120,6 +120,7 @@ _load_iso_cache()
 _jobs: dict = {}
 _token_cache: dict = {}  # ps_hash → { token, expires_at }
 _lock = threading.Lock()
+_running_jobs: set = set()   # job_ids with active deploy threads in this process
 
 
 # ── job persistence ───────────────────────────────────────────────────────────
@@ -148,6 +149,54 @@ def _save_jobs():
 
 # Load on import
 _load_jobs()
+
+
+# ── credential secrets store ──────────────────────────────────────────────────
+# Credentials (offline_token, pull_secret) are kept in a separate file with
+# 0600 permissions so they survive service restarts for resume capability,
+# but are never included in the UI-visible jobs.json config summary.
+
+_SECRETS_FILE = WORK_DIR / '.job_secrets'
+_secrets: dict = {}   # job_id → { offline_token, pull_secret }
+
+
+def _load_secrets():
+    global _secrets
+    try:
+        if _SECRETS_FILE.exists():
+            with open(_SECRETS_FILE) as f:
+                _secrets = json.load(f)
+    except Exception:
+        _secrets = {}
+
+
+def _save_secrets():
+    try:
+        WORK_DIR.mkdir(parents=True, exist_ok=True)
+        with open(_SECRETS_FILE, 'w') as f:
+            json.dump(_secrets, f)
+        os.chmod(_SECRETS_FILE, 0o600)
+    except Exception:
+        pass
+
+
+def _store_job_secrets(job_id: str, offline_token: str, pull_secret: str):
+    with _lock:
+        _secrets[job_id] = {'offline_token': offline_token, 'pull_secret': pull_secret}
+        _save_secrets()
+
+
+def _get_job_secrets(job_id: str) -> dict:
+    return dict(_secrets.get(job_id, {}))
+
+
+def _delete_job_secrets(job_id: str):
+    with _lock:
+        _secrets.pop(job_id, None)
+        _save_secrets()
+
+
+_load_secrets()
 
 
 # ── helpers ───────────────────────────────────────────────────────────────────
@@ -490,6 +539,11 @@ def deploy():
         }
         _save_jobs()
 
+    # Persist credentials separately (0600 file) so the job can be resumed
+    # if the service restarts mid-deployment.
+    _store_job_secrets(job_id, cfg['offline_token'], cfg['pull_secret'])
+
+    _running_jobs.add(job_id)
     t = threading.Thread(target=_run_deploy, args=(job_id, cfg), daemon=True,
                          name=f'ocp-deploy-{job_id}')
     t.start()
@@ -559,6 +613,8 @@ def delete_job(job_id):
     with _lock:
         _jobs.pop(job_id, None)
         _save_jobs()
+
+    _delete_job_secrets(job_id)
 
     return jsonify({'ok': True, 'deleted_vms': deleted_vms, 'deleted_disks': deleted_disks})
 
@@ -745,24 +801,50 @@ def _vm_xml(name: str, vcpus: int, ram_mb: int, disk_path: str,
 # ── Background deployment worker ──────────────────────────────────────────────
 
 def _run_deploy(job_id: str, cfg: dict):
-    """Full deployment pipeline — runs in a daemon thread."""
+    """Full deployment pipeline — runs in a daemon thread.
+
+    Safe to restart mid-flight: each major step checks whether its output
+    already exists in the persisted job state and skips the work if so.
+    This lets _resume_pending_jobs() re-spawn this function after a service
+    restart without redoing completed steps.
+    """
+    _running_jobs.add(job_id)
 
     def log(msg, level='info'):
         _job_log(job_id, msg, level)
 
     def phase(name, pct):
-        _job_set(job_id, phase=name, progress=pct)
+        # Never go backwards in progress when resuming
+        current = _jobs.get(job_id, {}).get('progress', 0)
+        _job_set(job_id, phase=name, progress=max(current, pct))
         log(f'── {name} ──')
 
     def fail(msg):
         _job_set(job_id, status='failed', phase='Failed')
         log(msg, 'error')
+        _running_jobs.discard(job_id)
 
     try:
         WORK_DIR.mkdir(parents=True, exist_ok=True)
         cluster_name = cfg['cluster_name']
         job_dir      = WORK_DIR / job_id
         job_dir.mkdir(exist_ok=True)
+
+        # ── Resume state ──────────────────────────────────────────────────────
+        # Read whatever was persisted before the restart.
+        saved          = _jobs.get(job_id, {})
+        saved_cluster  = saved.get('cluster_id')
+        saved_infra    = saved.get('infra_env_id')
+        saved_iso      = saved.get('iso_path')
+        saved_vms      = saved.get('vms', [])
+        is_resuming    = saved.get('progress', 0) > 0
+
+        if is_resuming:
+            log('── Resuming interrupted deployment ──', 'warn')
+            log(f'  cluster_id   : {saved_cluster or "not yet created"}')
+            log(f'  infra_env_id : {saved_infra   or "not yet created"}')
+            log(f'  iso_path     : {saved_iso     or "not yet downloaded"}')
+            log(f'  vms          : {saved_vms or "not yet created"}')
 
         deployment_type = cfg.get('deployment_type', 'sno')
         is_sno          = (deployment_type == 'sno')
@@ -790,152 +872,164 @@ def _run_deploy(job_id: str, cfg: dict):
             return
 
         # ── Step 2: Create cluster ────────────────────────────────────────────
-        phase('Creating cluster record', 10)
-        cluster_payload = {
-            'name':                   cluster_name,
-            'openshift_version':      cfg['ocp_version'],
-            'base_dns_domain':        cfg['base_domain'],
-            'pull_secret':            cfg['pull_secret'],
-            'ssh_public_key':         cfg.get('ssh_public_key', ''),
-            'high_availability_mode': 'None' if is_sno else 'Full',
-            'network_type':           'OVNKubernetes',
-            'machine_networks':       [{'cidr': cfg['machine_cidr']}],
-            'cluster_networks':       [{'cidr': cfg.get('cluster_cidr', '10.128.0.0/14'),
-                                        'host_prefix': 23}],
-            'service_networks':       [{'cidr': cfg.get('service_cidr', '172.30.0.0/16')}],
-        }
-        if not is_sno:
-            cluster_payload['api_vips']     = [{'ip': cfg['api_vip']}]
-            cluster_payload['ingress_vips'] = [{'ip': cfg['ingress_vip']}]
+        if saved_cluster:
+            cluster_id = saved_cluster
+            log(f'Resuming: cluster already exists ({cluster_id}) ✓')
+            phase('Cluster record exists', 10)
+        else:
+            phase('Creating cluster record', 10)
+            cluster_payload = {
+                'name':                   cluster_name,
+                'openshift_version':      cfg['ocp_version'],
+                'base_dns_domain':        cfg['base_domain'],
+                'pull_secret':            cfg['pull_secret'],
+                'ssh_public_key':         cfg.get('ssh_public_key', ''),
+                'high_availability_mode': 'None' if is_sno else 'Full',
+                'network_type':           'OVNKubernetes',
+                'machine_networks':       [{'cidr': cfg['machine_cidr']}],
+                'cluster_networks':       [{'cidr': cfg.get('cluster_cidr', '10.128.0.0/14'),
+                                            'host_prefix': 23}],
+                'service_networks':       [{'cidr': cfg.get('service_cidr', '172.30.0.0/16')}],
+            }
+            if not is_sno:
+                cluster_payload['api_vips']     = [{'ip': cfg['api_vip']}]
+                cluster_payload['ingress_vips'] = [{'ip': cfg['ingress_vip']}]
 
-        try:
-            r = _ai('POST', '/clusters', token, cluster_payload)
-            cluster_id = r.json()['id']
-            log(f'Cluster created: {cluster_id} ✓')
-        except Exception as e:
-            fail(f'Failed to create cluster: {e}')
-            return
+            try:
+                r = _ai('POST', '/clusters', token, cluster_payload)
+                cluster_id = r.json()['id']
+                log(f'Cluster created: {cluster_id} ✓')
+            except Exception as e:
+                fail(f'Failed to create cluster: {e}')
+                return
 
-        _job_set(job_id, cluster_id=cluster_id)
+            _job_set(job_id, cluster_id=cluster_id)
 
-        # ── Step 3: Create infra-env (or reuse cached) ───────────────────────
-        phase('Creating infrastructure environment', 18)
-        use_static_ip = bool(cfg.get('static_ip_enabled') and cfg.get('node_ips'))
+        # ── Step 3 + 4: Infra-env + discovery ISO ───────────────────────────────
+        use_static_ip   = bool(cfg.get('static_ip_enabled') and cfg.get('node_ips'))
         iso_fingerprint = _iso_fingerprint(
             cfg['ocp_version'], cfg['pull_secret'], cfg.get('ssh_public_key', '')
         )
-        # Static IP config (MAC→IP) is deployment-specific and baked into the ISO —
-        # never reuse a cached ISO for static IP deployments.
-        if use_static_ip:
-            cached_infra_env_id, cached_iso_path = None, None
+
+        # Check if infra-env + ISO already exist from a previous (interrupted) run
+        if saved_infra and saved_iso and Path(saved_iso).exists():
+            infra_env_id = saved_infra
+            iso_path     = Path(saved_iso)
+            log(f'Resuming: infra-env {infra_env_id} and ISO already downloaded ✓')
+            phase('Infrastructure environment ready', 32)
         else:
-            cached_infra_env_id, cached_iso_path = _get_cached_iso(iso_fingerprint)
-        infra_payload = {
-            'name':              f'{cluster_name}-infra',
-            'cluster_id':        cluster_id,
-            'openshift_version': cfg['ocp_version'],
-            'pull_secret':       cfg['pull_secret'],
-            'image_type':        'minimal-iso',
-            'cpu_architecture':  'x86_64',
-        }
-        if cfg.get('ssh_public_key', '').strip():
-            infra_payload['ssh_authorized_key'] = cfg['ssh_public_key'].strip()
-
-        # Static network configuration — only if the user requested it
-        if cfg.get('static_ip_enabled') and cfg.get('node_ips'):
-            import ipaddress as _ipaddress
-            machine_cidr = cfg.get('machine_cidr', '192.168.122.0/24')
-            try:
-                prefix_len = int(_ipaddress.ip_network(machine_cidr, strict=False).prefixlen)
-            except Exception:
-                prefix_len = 24
-
-            gateway  = cfg.get('gateway', '').strip()
-            dns_raw  = cfg.get('dns_servers', '8.8.8.8').strip()
-            dns_list = [s.strip() for s in dns_raw.split(',') if s.strip()] or ['8.8.8.8']
-
-            # Build per-node nmstate entries; skip nodes with no IP configured
-            node_ip_map = {e['name']: e['ip'] for e in cfg['node_ips'] if e.get('ip')}
-            static_cfg  = []
-            for vm_name in vm_names_pre:
-                ip = node_ip_map.get(vm_name, '').strip()
-                if not ip:
-                    continue
-                mac = mac_map[vm_name]
-                network_yaml = _build_nmstate_yaml(mac, ip, prefix_len, gateway, dns_list)
-                static_cfg.append({
-                    'network_yaml':      network_yaml,
-                    'mac_interface_map': [{'mac_address': mac, 'logical_nic_name': 'eth0'}],
-                })
-
-            if static_cfg:
-                infra_payload['static_network_config'] = static_cfg
-                log(f'Static IP config prepared for {len(static_cfg)} node(s) ✓')
-            else:
-                log('Static IP enabled but no node IPs provided — falling back to DHCP', 'warn')
-
-        if cached_infra_env_id:
-            infra_env_id = cached_infra_env_id
-            iso_path     = cached_iso_path
-            log(f'Using cached infra-env {infra_env_id} and ISO ✓ (skipping download)')
-            phase('Using cached discovery ISO', 32)
-        else:
-            try:
-                r = _ai('POST', '/infra-envs', token, infra_payload)
-                infra_env_id = r.json()['id']
-                log(f'Infra-env created: {infra_env_id} ✓')
-            except Exception as e:
-                fail(f'Failed to create infra-env: {e}')
-                return
-
-            # ── Step 4: Download discovery ISO ───────────────────────────────
-            phase('Downloading discovery ISO', 22)
-            # Static IP ISOs are deployment-specific — store in job dir, not cache
+            phase('Creating infrastructure environment', 18)
+            # Static IP config (MAC→IP) is deployment-specific and baked into the ISO —
+            # never reuse a cached ISO for static IP deployments.
             if use_static_ip:
-                iso_path = job_dir / 'discovery.iso'
-                iso_path.parent.mkdir(parents=True, exist_ok=True)
+                cached_infra_env_id, cached_iso_path = None, None
             else:
-                iso_path = ISO_CACHE_DIR / iso_fingerprint / 'discovery.iso'
-                iso_path.parent.mkdir(parents=True, exist_ok=True)
-            try:
-                r = _ai('GET', f'/infra-envs/{infra_env_id}/downloads/image-url', token)
-                iso_url = r.json()['url']
-                log(f'ISO URL obtained, downloading (~100 MB)…')
-                with _req.get(iso_url, stream=True, timeout=300) as dl:
-                    dl.raise_for_status()
-                    total = int(dl.headers.get('content-length', 0))
-                    done  = 0
-                    with open(iso_path, 'wb') as f:
-                        for chunk in dl.iter_content(chunk_size=1024 * 1024):
-                            f.write(chunk)
-                            done += len(chunk)
-                            if total:
-                                pct = 22 + int(done / total * 10)
-                                _job_set(job_id, progress=pct)
-                if use_static_ip:
-                    log(f'ISO downloaded (static IP — not cached) ✓')
+                cached_infra_env_id, cached_iso_path = _get_cached_iso(iso_fingerprint)
+
+            infra_payload = {
+                'name':              f'{cluster_name}-infra',
+                'cluster_id':        cluster_id,
+                'openshift_version': cfg['ocp_version'],
+                'pull_secret':       cfg['pull_secret'],
+                'image_type':        'minimal-iso',
+                'cpu_architecture':  'x86_64',
+            }
+            if cfg.get('ssh_public_key', '').strip():
+                infra_payload['ssh_authorized_key'] = cfg['ssh_public_key'].strip()
+
+            # Static network configuration — only if the user requested it
+            if cfg.get('static_ip_enabled') and cfg.get('node_ips'):
+                import ipaddress as _ipaddress
+                machine_cidr = cfg.get('machine_cidr', '192.168.122.0/24')
+                try:
+                    prefix_len = int(_ipaddress.ip_network(machine_cidr, strict=False).prefixlen)
+                except Exception:
+                    prefix_len = 24
+
+                gateway  = cfg.get('gateway', '').strip()
+                dns_raw  = cfg.get('dns_servers', '8.8.8.8').strip()
+                dns_list = [s.strip() for s in dns_raw.split(',') if s.strip()] or ['8.8.8.8']
+
+                node_ip_map = {e['name']: e['ip'] for e in cfg['node_ips'] if e.get('ip')}
+                static_cfg  = []
+                for vm_name in vm_names_pre:
+                    ip = node_ip_map.get(vm_name, '').strip()
+                    if not ip:
+                        continue
+                    mac = mac_map[vm_name]
+                    network_yaml = _build_nmstate_yaml(mac, ip, prefix_len, gateway, dns_list)
+                    static_cfg.append({
+                        'network_yaml':      network_yaml,
+                        'mac_interface_map': [{'mac_address': mac, 'logical_nic_name': 'eth0'}],
+                    })
+
+                if static_cfg:
+                    infra_payload['static_network_config'] = static_cfg
+                    log(f'Static IP config prepared for {len(static_cfg)} node(s) ✓')
                 else:
-                    log(f'ISO downloaded and cached ✓')
-                # QEMU runs as libvirt-qemu — ensure file + parent dirs are world-readable
-                os.chmod(iso_path, 0o644)
-                p = iso_path.parent
-                while p != WORK_DIR.parent:
-                    try:
-                        os.chmod(p, p.stat().st_mode | 0o111)
-                    except Exception:
-                        pass
-                    p = p.parent
-                # Only cache DHCP ISOs — static IP ISOs are deployment-specific
-                if not use_static_ip:
-                    _store_iso_cache(iso_fingerprint, infra_env_id, iso_path,
-                                     cfg['ocp_version'], cfg['pull_secret'],
-                                     cfg.get('ssh_public_key', ''))
-            except Exception as e:
-                fail(f'ISO download failed: {e}')
-                return
+                    log('Static IP enabled but no node IPs provided — falling back to DHCP', 'warn')
+
+            if cached_infra_env_id:
+                infra_env_id = cached_infra_env_id
+                iso_path     = cached_iso_path
+                log(f'Using cached infra-env {infra_env_id} and ISO ✓ (skipping download)')
+                phase('Using cached discovery ISO', 32)
+            else:
+                try:
+                    r = _ai('POST', '/infra-envs', token, infra_payload)
+                    infra_env_id = r.json()['id']
+                    log(f'Infra-env created: {infra_env_id} ✓')
+                except Exception as e:
+                    fail(f'Failed to create infra-env: {e}')
+                    return
+
+                # ── Step 4: Download discovery ISO ───────────────────────────
+                phase('Downloading discovery ISO', 22)
+                if use_static_ip:
+                    iso_path = job_dir / 'discovery.iso'
+                    iso_path.parent.mkdir(parents=True, exist_ok=True)
+                else:
+                    iso_path = ISO_CACHE_DIR / iso_fingerprint / 'discovery.iso'
+                    iso_path.parent.mkdir(parents=True, exist_ok=True)
+                try:
+                    r = _ai('GET', f'/infra-envs/{infra_env_id}/downloads/image-url', token)
+                    iso_url = r.json()['url']
+                    log(f'ISO URL obtained, downloading (~100 MB)…')
+                    with _req.get(iso_url, stream=True, timeout=300) as dl:
+                        dl.raise_for_status()
+                        total = int(dl.headers.get('content-length', 0))
+                        done  = 0
+                        with open(iso_path, 'wb') as f:
+                            for chunk in dl.iter_content(chunk_size=1024 * 1024):
+                                f.write(chunk)
+                                done += len(chunk)
+                                if total:
+                                    pct = 22 + int(done / total * 10)
+                                    _job_set(job_id, progress=pct)
+                    if use_static_ip:
+                        log(f'ISO downloaded (static IP — not cached) ✓')
+                    else:
+                        log(f'ISO downloaded and cached ✓')
+                    os.chmod(iso_path, 0o644)
+                    p = iso_path.parent
+                    while p != WORK_DIR.parent:
+                        try:
+                            os.chmod(p, p.stat().st_mode | 0o111)
+                        except Exception:
+                            pass
+                        p = p.parent
+                    if not use_static_ip:
+                        _store_iso_cache(iso_fingerprint, infra_env_id, iso_path,
+                                         cfg['ocp_version'], cfg['pull_secret'],
+                                         cfg.get('ssh_public_key', ''))
+                except Exception as e:
+                    fail(f'ISO download failed: {e}')
+                    return
+
+            # Persist infra_env_id + iso_path so a resume skips this section
+            _job_set(job_id, infra_env_id=infra_env_id, iso_path=str(iso_path))
 
         # ── Step 5: Create VMs ────────────────────────────────────────────────
-        phase('Creating KVM virtual machines', 35)
         vm_names = vm_names_pre  # already computed above for MAC generation
 
         vcpus_cp  = int(cfg.get('cp_vcpus',  8))
@@ -955,90 +1049,120 @@ def _run_deploy(job_id: str, cfg: dict):
             return
 
         disk_dir = Path(cfg.get('storage_path', '/var/lib/libvirt/images'))
-        created_vms = []
 
-        def _make_disk(path: Path, size_gb: int) -> bool:
-            """Create a qcow2 at path, chmod it. Returns True on success."""
-            if path.exists():
-                path.unlink()
-            r = subprocess.run(
-                ['qemu-img', 'create', '-f', 'qcow2', str(path), f'{size_gb}G'],
-                capture_output=True, text=True,
-            )
-            if r.returncode != 0:
-                fail(f'qemu-img failed ({path.name}): {r.stderr}')
-                return False
+        # Check if VMs already exist from a previous (interrupted) run
+        if saved_vms:
+            existing_running = []
             try:
-                os.chmod(path, 0o644)
+                for vm_name in saved_vms:
+                    try:
+                        d = conn.lookupByName(vm_name)
+                        if d.isActive():
+                            existing_running.append(vm_name)
+                    except libvirt.libvirtError:
+                        pass
             except Exception:
                 pass
-            return True
 
-        try:
-            for i, vm_name in enumerate(vm_names):
-                is_worker = (not is_sno) and (i >= n_control)
-                vcpus   = vcpus_w   if is_worker else vcpus_cp
-                ram_mb  = ram_w     if is_worker else ram_cp
-                disk_gb = disk_w    if is_worker else disk_cp
+            if len(existing_running) == len(vm_names):
+                log(f'Resuming: all {len(existing_running)} VMs already running ✓')
+                phase('VMs already running', 44)
+                conn.close()
+                _job_set(job_id, vms=saved_vms)
+                # Jump straight to node registration
+                created_vms = saved_vms
+                goto_node_wait = True
+            else:
+                log(f'Resuming: only {len(existing_running)}/{len(vm_names)} VMs running — recreating all', 'warn')
+                goto_node_wait = False
+                created_vms = []
+        else:
+            goto_node_wait = False
+            created_vms = []
 
-                disk_path = disk_dir / f'{vm_name}.qcow2'
+        if not goto_node_wait:
+            phase('Creating KVM virtual machines', 35)
 
-                # Clean up any leftover VM from a previous failed attempt
-                try:
-                    old = conn.lookupByName(vm_name)
-                    if old.isActive():
-                        old.destroy()
-                    old.undefine()
-                    log(f'Removed existing VM {vm_name}')
-                except libvirt.libvirtError:
-                    pass
-
-                # Create primary disk
-                if not _make_disk(disk_path, disk_gb):
-                    return
-
-                # Create extra disks (vdb, vdc, …)
-                extra_paths = []
-                for ei, espec in enumerate(extra_disk_specs):
-                    esize = int(espec.get('size_gb', 100))
-                    epath = disk_dir / f'{vm_name}-extra{ei+1}.qcow2'
-                    if not _make_disk(epath, esize):
-                        return
-                    extra_paths.append(str(epath))
-                    log(f'  Extra disk {ei+1}: {epath.name} ({esize} GB)')
-
-                net_name = cfg.get('libvirt_network', 'default')
-                is_host_bridge = os.path.isdir(f'/sys/class/net/{net_name}/bridge')
-                xml = _vm_xml(
-                    name        = vm_name,
-                    vcpus       = vcpus,
-                    ram_mb      = ram_mb,
-                    disk_path   = str(disk_path),
-                    iso_path    = str(iso_path),
-                    network     = net_name,
-                    host_bridge = is_host_bridge,
-                    extra_disks = extra_paths,
-                    mac_address = mac_map.get(vm_name),   # deterministic MAC
+            def _make_disk(path: Path, size_gb: int) -> bool:
+                """Create a qcow2 at path, chmod it. Returns True on success."""
+                if path.exists():
+                    path.unlink()
+                rc = subprocess.run(
+                    ['qemu-img', 'create', '-f', 'qcow2', str(path), f'{size_gb}G'],
+                    capture_output=True, text=True,
                 )
-                dom = conn.defineXML(xml)
-                dom.create()
-                created_vms.append(vm_name)
-                role = 'worker' if is_worker else ('SNO' if is_sno else 'control-plane')
-                extra_info = f' + {len(extra_paths)} extra disk(s)' if extra_paths else ''
-                mac_info   = f', MAC {mac_map[vm_name]}' if vm_name in mac_map else ''
-                log(f'VM {vm_name} started ({vcpus} vCPU, {ram_mb//1024} GB RAM, {disk_gb} GB{extra_info}, {role}{mac_info}) ✓')
-                # Stagger starts so the host isn't overwhelmed with simultaneous boot I/O
-                if i < len(vm_names) - 1:
-                    time.sleep(15)
+                if rc.returncode != 0:
+                    fail(f'qemu-img failed ({path.name}): {rc.stderr}')
+                    return False
+                try:
+                    os.chmod(path, 0o644)
+                except Exception:
+                    pass
+                return True
 
-        except Exception as e:
-            conn.close()
-            fail(f'VM creation failed: {e}')
-            return
-        finally:
-            conn.close()
+            try:
+                for i, vm_name in enumerate(vm_names):
+                    is_worker = (not is_sno) and (i >= n_control)
+                    vcpus   = vcpus_w   if is_worker else vcpus_cp
+                    ram_mb  = ram_w     if is_worker else ram_cp
+                    disk_gb = disk_w    if is_worker else disk_cp
 
-        _job_set(job_id, vms=created_vms)
+                    disk_path = disk_dir / f'{vm_name}.qcow2'
+
+                    # Clean up any leftover VM from a previous failed attempt
+                    try:
+                        old = conn.lookupByName(vm_name)
+                        if old.isActive():
+                            old.destroy()
+                        old.undefine()
+                        log(f'Removed existing VM {vm_name}')
+                    except libvirt.libvirtError:
+                        pass
+
+                    if not _make_disk(disk_path, disk_gb):
+                        return
+
+                    # Create extra disks (vdb, vdc, …)
+                    extra_paths = []
+                    for ei, espec in enumerate(extra_disk_specs):
+                        esize = int(espec.get('size_gb', 100))
+                        epath = disk_dir / f'{vm_name}-extra{ei+1}.qcow2'
+                        if not _make_disk(epath, esize):
+                            return
+                        extra_paths.append(str(epath))
+                        log(f'  Extra disk {ei+1}: {epath.name} ({esize} GB)')
+
+                    net_name = cfg.get('libvirt_network', 'default')
+                    is_host_bridge = os.path.isdir(f'/sys/class/net/{net_name}/bridge')
+                    xml = _vm_xml(
+                        name        = vm_name,
+                        vcpus       = vcpus,
+                        ram_mb      = ram_mb,
+                        disk_path   = str(disk_path),
+                        iso_path    = str(iso_path),
+                        network     = net_name,
+                        host_bridge = is_host_bridge,
+                        extra_disks = extra_paths,
+                        mac_address = mac_map.get(vm_name),
+                    )
+                    dom = conn.defineXML(xml)
+                    dom.create()
+                    created_vms.append(vm_name)
+                    role = 'worker' if is_worker else ('SNO' if is_sno else 'control-plane')
+                    extra_info = f' + {len(extra_paths)} extra disk(s)' if extra_paths else ''
+                    mac_info   = f', MAC {mac_map[vm_name]}' if vm_name in mac_map else ''
+                    log(f'VM {vm_name} started ({vcpus} vCPU, {ram_mb//1024} GB RAM, {disk_gb} GB{extra_info}, {role}{mac_info}) ✓')
+                    if i < len(vm_names) - 1:
+                        time.sleep(15)
+
+            except Exception as e:
+                conn.close()
+                fail(f'VM creation failed: {e}')
+                return
+            finally:
+                conn.close()
+
+            _job_set(job_id, vms=created_vms)
 
         # ── Step 6: Wait for host discovery ──────────────────────────────────
         phase('Waiting for nodes to register', 45)
@@ -1288,10 +1412,57 @@ def _run_deploy(job_id: str, cfg: dict):
         log(f'API:     {api_url}')
         if result.get('kubeadmin_password'):
             log(f'kubeadmin password saved in job result.')
+        # Credentials no longer needed — delete from secrets file
+        _delete_job_secrets(job_id)
 
     except Exception as e:
         _job_set(job_id, status='failed', phase='Failed')
         _job_log(job_id, f'Unexpected error: {e}', 'error')
+
+    finally:
+        _running_jobs.discard(job_id)
+
+
+# ── Resume interrupted deployments on startup ────────────────────────────────
+
+def _resume_pending_jobs():
+    """Called once at startup (per worker process).
+
+    Any job that is still 'pending' (i.e. the deploy thread was killed by a
+    service restart) and has stored credentials will have its thread re-spawned.
+    The re-spawned _run_deploy call reads the persisted job state (cluster_id,
+    infra_env_id, iso_path, vms) and skips all already-completed steps.
+    """
+    import logging as _logging
+    logger = _logging.getLogger(__name__)
+    resumed = 0
+    for job_id, job in list(_jobs.items()):
+        if job.get('status') != 'pending':
+            continue
+        if job_id in _running_jobs:
+            continue   # already running in this process
+        secrets = _get_job_secrets(job_id)
+        if not secrets.get('offline_token') or not secrets.get('pull_secret'):
+            logger.warning(f'[OCP] Job {job_id} is pending but has no stored credentials — cannot auto-resume')
+            continue
+        # Merge credentials back into the config so _run_deploy has everything it needs
+        cfg = {**job.get('config', {}), **secrets}
+        logger.info(f'[OCP] Auto-resuming interrupted deployment: {job_id} ({job.get("config", {}).get("cluster_name", "?")})')
+        _running_jobs.add(job_id)
+        t = threading.Thread(
+            target=_run_deploy,
+            args=(job_id, cfg),
+            daemon=True,
+            name=f'ocp-resume-{job_id}',
+        )
+        t.start()
+        resumed += 1
+    if resumed:
+        logger.info(f'[OCP] Resumed {resumed} interrupted deployment(s)')
+
+
+# Called after all functions are defined so _run_deploy is available
+_resume_pending_jobs()
 
 
 # ── Kubeconfig download ───────────────────────────────────────────────────────
