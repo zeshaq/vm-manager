@@ -1894,17 +1894,19 @@ def retry_job(job_id):
 
 @ocp_bp.route('/api/openshift/jobs/<job_id>/reset', methods=['POST'])
 def reset_cluster(job_id):
-    """Reset a cluster back to discovery/ready state without auto-resuming.
+    """Reset or reinstall a cluster.
 
-    Signals any running thread to stop, then:
-      1. Cancels the installation (if active)
-      2. Resets the AI cluster to insufficient
-      3. Re-inserts the discovery ISO into every VM
-      4. Reboots VMs back into discovery mode
-      5. Sets job status to 'pending', awaiting manual Retry or Sync
+    For non-complete jobs (pending/running/failed):
+      • Signals the active thread to stop
+      • Cancels + resets the AI cluster to insufficient
+      • Re-inserts discovery ISO, reboots VMs into discovery mode
+      • Sets job to pending (no auto-resume — use Retry or Sync after)
 
-    Works regardless of current job status — useful for running, stuck,
-    or failed deployments that need a clean slate at the cluster level.
+    For complete (installed) jobs — full reinstall:
+      • Destroys all VMs and disk images
+      • Deletes the cluster + infra-env from Assisted Installer
+      • Clears all persisted cluster state (cluster_id, infra_env_id, vms, …)
+      • Spawns a fresh deployment from scratch
     """
     err = _auth()
     if err:
@@ -1914,11 +1916,10 @@ def reset_cluster(job_id):
     if not job:
         return jsonify({'error': 'Job not found'}), 404
 
-    cluster_id = job.get('cluster_id')
-    if not cluster_id:
-        return jsonify({'error': 'No cluster_id recorded — job must be restarted from scratch'}), 400
-
-    iso_path = job.get('iso_path')
+    cluster_id   = job.get('cluster_id')
+    infra_env_id = job.get('infra_env_id')
+    iso_path     = job.get('iso_path')
+    job_status   = job.get('status', '')
 
     stored        = _get_job_secrets(job_id)
     data          = request.get_json(silent=True) or {}
@@ -1934,14 +1935,94 @@ def reset_cluster(job_id):
     def _log(msg, level='info'):
         _job_log(job_id, msg, level)
 
-    # Signal any running thread to stop at its next safe point
+    # ── Signal any running thread to stop ─────────────────────────────────────
     if job_id in _running_jobs:
         _stop_jobs.add(job_id)
         _log('── Reset requested — signalling active thread to stop ──', 'warn')
-        # Give it up to 5 s to notice the flag (poll intervals are 20–30 s,
-        # so we can't wait for a clean exit; new thread starts immediately).
         time.sleep(1)
         _running_jobs.discard(job_id)
+
+    # ══ COMPLETE JOB: full teardown + fresh deploy ════════════════════════════
+    if job_status == 'complete':
+        _log('── Full teardown for reinstall ──', 'warn')
+
+        try:
+            token = _get_access_token(offline_token)
+        except Exception as e:
+            return jsonify({'error': f'Token exchange failed: {e}'}), 502
+
+        # 1. Delete cluster from AI
+        if cluster_id:
+            try:
+                try:
+                    _ai('POST', f'/clusters/{cluster_id}/actions/cancel', token, body={})
+                except Exception:
+                    pass
+                _ai('DELETE', f'/clusters/{cluster_id}', token)
+                _log(f'  Deleted AI cluster {cluster_id} ✓')
+            except Exception as e:
+                _log(f'  AI cluster delete warning: {e}', 'warn')
+
+        # 2. Delete infra-env from AI
+        if infra_env_id:
+            try:
+                _ai('DELETE', f'/infra-envs/{infra_env_id}', token)
+                _log(f'  Deleted AI infra-env {infra_env_id} ✓')
+            except Exception as e:
+                _log(f'  AI infra-env delete warning: {e}', 'warn')
+
+        # 3. Destroy libvirt VMs + disk images
+        vm_names     = job.get('vms', [])
+        storage_path = Path(job.get('config', {}).get('storage_path', '/var/lib/libvirt/images'))
+        destroyed_vms, destroyed_disks = [], []
+
+        if vm_names:
+            try:
+                conn = libvirt.open('qemu:///system')
+                for vm_name in vm_names:
+                    try:
+                        dom = conn.lookupByName(vm_name)
+                        if dom.isActive():
+                            dom.destroy()
+                        dom.undefine()
+                        destroyed_vms.append(vm_name)
+                        _log(f'  Destroyed VM {vm_name} ✓')
+                    except libvirt.libvirtError:
+                        pass
+                conn.close()
+            except Exception as e:
+                _log(f'  libvirt warning: {e}', 'warn')
+
+            for vm_name in vm_names:
+                for disk in storage_path.glob(f'{vm_name}*.qcow2'):
+                    try:
+                        disk.unlink()
+                        destroyed_disks.append(disk.name)
+                        _log(f'  Removed disk {disk.name} ✓')
+                    except OSError as e:
+                        _log(f'  Disk remove warning: {e}', 'warn')
+
+        # 4. Reset job state for a clean re-deploy
+        now_ts = time.strftime('%H:%M:%S')
+        _job_set(job_id,
+            status='pending', phase='Queued for reinstall', progress=0,
+            cluster_id=None, infra_env_id=None, iso_path=None, vms=[], result=None,
+            logs=[{'ts': now_ts, 'msg': '── Reinstall triggered ──', 'level': 'warn'}],
+        )
+
+        # 5. Spawn fresh deploy
+        cfg = {**job.get('config', {}), 'offline_token': offline_token, 'pull_secret': pull_secret}
+        _running_jobs.add(job_id)
+        threading.Thread(target=_run_deploy, args=(job_id, cfg),
+                         daemon=True, name=f'ocp-reinstall-{job_id}').start()
+
+        return jsonify({'action': 'reinstall',
+                        'destroyed_vms': destroyed_vms,
+                        'destroyed_disks': destroyed_disks})
+
+    # ══ NON-COMPLETE JOB: cancel/reset in AI, reboot VMs into discovery ════════
+    if not cluster_id:
+        return jsonify({'error': 'No cluster_id recorded — job must be restarted from scratch'}), 400
 
     try:
         token = _get_access_token(offline_token)
@@ -2112,3 +2193,107 @@ def download_kubeconfig(job_id):
     from flask import send_file
     return send_file(str(kc_path), as_attachment=True,
                      download_name='kubeconfig', mimetype='text/plain')
+
+
+# ── Cluster live status (kubectl) ─────────────────────────────────────────────
+
+def _run_kubectl(kubeconfig: Path, args: list, timeout: int = 15) -> dict:
+    """Run kubectl/oc with the given kubeconfig and return parsed JSON.
+
+    Returns {'ok': True, 'data': <parsed>} or {'ok': False, 'error': <str>}.
+    """
+    import shutil
+    kubectl = shutil.which('kubectl') or shutil.which('oc')
+    if not kubectl:
+        return {'ok': False, 'error': 'kubectl / oc not found in PATH'}
+    cmd = [kubectl, f'--kubeconfig={kubeconfig}'] + args
+    try:
+        result = subprocess.run(
+            cmd, capture_output=True, text=True, timeout=timeout,
+            env={**os.environ, 'KUBECONFIG': str(kubeconfig)},
+        )
+        if result.returncode != 0:
+            return {'ok': False, 'error': result.stderr.strip()[:500]}
+        return {'ok': True, 'data': json.loads(result.stdout)}
+    except subprocess.TimeoutExpired:
+        return {'ok': False, 'error': f'kubectl timed out after {timeout}s'}
+    except json.JSONDecodeError as e:
+        return {'ok': False, 'error': f'JSON parse error: {e}'}
+    except Exception as e:
+        return {'ok': False, 'error': str(e)}
+
+
+@ocp_bp.route('/api/openshift/jobs/<job_id>/cluster')
+def cluster_status(job_id):
+    """Live cluster status via kubectl: nodes, cluster operators, version."""
+    err = _auth()
+    if err:
+        return err
+
+    job = _jobs.get(job_id)
+    if not job:
+        return jsonify({'error': 'Job not found'}), 404
+
+    kc_path = WORK_DIR / job_id / 'kubeconfig'
+    if not kc_path.exists():
+        # Try the path stored in result as fallback
+        kc_path_alt = Path(job.get('result', {}).get('kubeconfig_path', ''))
+        if kc_path_alt.exists():
+            kc_path = kc_path_alt
+        else:
+            return jsonify({'error': 'kubeconfig not available — cluster may still be deploying'}), 404
+
+    payload: dict = {'nodes': [], 'operators': [], 'version': None, 'errors': []}
+
+    # ── Nodes ──────────────────────────────────────────────────────────────────
+    r = _run_kubectl(kc_path, ['get', 'nodes', '-o', 'json'], timeout=15)
+    if r['ok']:
+        for item in r['data'].get('items', []):
+            labels = item.get('metadata', {}).get('labels', {})
+            roles  = sorted([
+                k.split('/')[-1]
+                for k in labels if k.startswith('node-role.kubernetes.io/')
+            ]) or ['worker']
+            ready = 'Unknown'
+            for cond in item.get('status', {}).get('conditions', []):
+                if cond.get('type') == 'Ready':
+                    ready = 'Ready' if cond.get('status') == 'True' else 'NotReady'
+                    break
+            payload['nodes'].append({
+                'name':            item['metadata']['name'],
+                'roles':           roles,
+                'ready':           ready,
+                'kubelet_version': item.get('status', {}).get('nodeInfo', {}).get('kubeletVersion', ''),
+            })
+    else:
+        payload['errors'].append(f'nodes: {r["error"]}')
+
+    # ── Cluster Operators ──────────────────────────────────────────────────────
+    r = _run_kubectl(kc_path, ['get', 'clusteroperators', '-o', 'json'], timeout=20)
+    if r['ok']:
+        for item in r['data'].get('items', []):
+            conds = {c['type']: c for c in item.get('status', {}).get('conditions', [])}
+            payload['operators'].append({
+                'name':        item['metadata']['name'],
+                'available':   conds.get('Available',   {}).get('status', 'Unknown'),
+                'progressing': conds.get('Progressing', {}).get('status', 'Unknown'),
+                'degraded':    conds.get('Degraded',    {}).get('status', 'Unknown'),
+                'message':     (conds.get('Degraded')    or conds.get('Progressing') or {}).get('message', ''),
+            })
+    else:
+        payload['errors'].append(f'clusteroperators: {r["error"]}')
+
+    # ── Cluster Version ────────────────────────────────────────────────────────
+    r = _run_kubectl(kc_path, ['get', 'clusterversion', 'version', '-o', 'json'], timeout=15)
+    if r['ok']:
+        data    = r['data']
+        history = data.get('status', {}).get('history', [])
+        current = next((h for h in history if h.get('state') == 'Completed'), history[0] if history else {})
+        payload['version'] = {
+            'version': current.get('version', ''),
+            'channel': data.get('spec', {}).get('channel', ''),
+        }
+    else:
+        payload['errors'].append(f'clusterversion: {r["error"]}')
+
+    return jsonify(payload)

@@ -6,6 +6,7 @@ import {
   AlertTriangle, ChevronDown, ChevronRight,
   KeyRound, Disc3, Server, Network, Cpu, Trophy, ShieldCheck,
   Upload, X, Search, ChevronsDown, Maximize2, Minimize2, RotateCcw,
+  Layers,
 } from 'lucide-react'
 import api from '../api'
 
@@ -497,47 +498,89 @@ function SyncModal({ jobId, onClose, onSynced }) {
   )
 }
 
-// ── Reset confirmation modal ──────────────────────────────────────────────────
-function ResetModal({ jobId, clusterName, onClose, onReset }) {
-  const [busy,  setBusy]  = useState(false)
-  const [error, setError] = useState('')
+// ── Reset / Reinstall confirmation modal ─────────────────────────────────────
+function ResetModal({ jobId, clusterName, isReinstall, onClose, onReset }) {
+  const [busy,         setBusy]         = useState(false)
+  const [error,        setError]        = useState('')
+  const [offlineToken, setOfflineToken] = useState('')
+  const [pullSecret,   setPullSecret]   = useState('')
 
   const confirm = async () => {
+    if (isReinstall && (!offlineToken.trim() || !pullSecret.trim())) {
+      setError('Both credentials are required for reinstall')
+      return
+    }
     setBusy(true)
     setError('')
     try {
-      await api.post(`/openshift/jobs/${jobId}/reset`, {})
+      const body = isReinstall
+        ? { offline_token: offlineToken.trim(), pull_secret: pullSecret.trim() }
+        : {}
+      await api.post(`/openshift/jobs/${jobId}/reset`, body)
       onReset()
     } catch (e) {
       const msg = e.response?.data?.error
       if (msg === 'no_stored_credentials') {
         onClose('need_creds')
       } else {
-        setError(msg || 'Reset failed')
+        setError(e.response?.data?.message || msg || 'Operation failed')
         setBusy(false)
       }
     }
   }
 
+  const title  = isReinstall ? 'Reinstall Cluster' : 'Reset Cluster'
+  const icon   = isReinstall ? 'text-red-400' : 'text-orange-400'
+  const btnCls = isReinstall ? 'bg-red-700 hover:bg-red-600' : 'bg-orange-600 hover:bg-orange-500'
+  const btnLbl = isReinstall ? (busy ? 'Reinstalling…' : 'Reinstall') : (busy ? 'Resetting…' : 'Reset Cluster')
+
   return (
     <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
-      <div className="bg-navy-800 border border-navy-600 rounded-xl w-full max-w-sm shadow-2xl">
+      <div className="bg-navy-800 border border-navy-600 rounded-xl w-full max-w-md shadow-2xl">
         <div className="flex items-center gap-3 px-5 py-4 border-b border-navy-700">
-          <RotateCcw size={16} className="text-orange-400" />
-          <span className="text-slate-100 font-semibold text-sm">Reset Cluster</span>
+          <RotateCcw size={16} className={icon} />
+          <span className="text-slate-100 font-semibold text-sm">{title}</span>
           <button onClick={() => onClose()} className="ml-auto p-1 rounded text-slate-500 hover:text-slate-300">
             <X size={15} />
           </button>
         </div>
         <div className="p-5 space-y-4">
-          <p className="text-slate-300 text-sm">
-            This will <span className="text-orange-300 font-medium">cancel and reset</span> the{' '}
-            <code className="text-sky-300 text-xs">{clusterName}</code> cluster in Assisted Installer,
-            re-insert the discovery ISO, and reboot all VMs back into discovery mode.
-          </p>
-          <p className="text-slate-500 text-xs">
-            Any in-progress installation will be interrupted. Use <strong className="text-slate-400">Retry</strong> afterwards to start installation again.
-          </p>
+          {isReinstall ? (
+            <>
+              <div className="flex items-start gap-2 bg-red-500/10 border border-red-500/30 rounded-lg p-3">
+                <AlertTriangle size={14} className="text-red-400 flex-shrink-0 mt-0.5" />
+                <p className="text-red-300 text-sm">
+                  This will <strong>permanently destroy all VMs</strong> and disk images for{' '}
+                  <code className="text-red-200">{clusterName}</code>, delete the cluster from Assisted Installer,
+                  and start a completely fresh deployment.
+                </p>
+              </div>
+              <p className="text-slate-500 text-xs">Credentials are required to clean up the AI resources.</p>
+              <div className="space-y-1.5">
+                <label className="text-xs text-slate-400 font-medium">Offline Token</label>
+                <textarea rows={2} value={offlineToken} onChange={e => setOfflineToken(e.target.value)}
+                  placeholder="eyJhbGciO…"
+                  className="w-full bg-navy-900 border border-navy-600 rounded-md px-3 py-2 text-slate-200 text-xs font-mono resize-none focus:outline-none focus:border-red-500" />
+              </div>
+              <div className="space-y-1.5">
+                <label className="text-xs text-slate-400 font-medium">Pull Secret</label>
+                <textarea rows={2} value={pullSecret} onChange={e => setPullSecret(e.target.value)}
+                  placeholder='{"auths":…}'
+                  className="w-full bg-navy-900 border border-navy-600 rounded-md px-3 py-2 text-slate-200 text-xs font-mono resize-none focus:outline-none focus:border-red-500" />
+              </div>
+            </>
+          ) : (
+            <>
+              <p className="text-slate-300 text-sm">
+                This will <span className="text-orange-300 font-medium">cancel and reset</span> the{' '}
+                <code className="text-sky-300 text-xs">{clusterName}</code> cluster in Assisted Installer,
+                re-insert the discovery ISO, and reboot all VMs back into discovery mode.
+              </p>
+              <p className="text-slate-500 text-xs">
+                Any in-progress installation will be interrupted. Use <strong className="text-slate-400">Retry</strong> afterwards to start installation again.
+              </p>
+            </>
+          )}
 
           {error && (
             <div className="flex items-center gap-2 text-red-400 text-xs bg-red-500/10 border border-red-500/30 rounded px-3 py-2">
@@ -551,11 +594,248 @@ function ResetModal({ jobId, clusterName, onClose, onReset }) {
               Cancel
             </button>
             <button onClick={confirm} disabled={busy}
-              className="flex-1 flex items-center justify-center gap-2 bg-orange-600 hover:bg-orange-500 disabled:opacity-50 text-white text-sm font-semibold py-2 rounded-md transition-colors">
+              className={`flex-1 flex items-center justify-center gap-2 ${btnCls} disabled:opacity-50 text-white text-sm font-semibold py-2 rounded-md transition-colors`}>
               {busy ? <Loader2 size={13} className="animate-spin" /> : <RotateCcw size={13} />}
-              {busy ? 'Resetting…' : 'Reset Cluster'}
+              {btnLbl}
             </button>
           </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ── Cluster Dashboard tab ─────────────────────────────────────────────────────
+function ClusterDashboard({ jobId, jobResult, onReinstall }) {
+  const [data,    setData]    = useState(null)
+  const [loading, setLoading] = useState(true)
+  const [error,   setError]   = useState(null)
+  const [copied,  setCopied]  = useState(false)
+  const [showAll, setShowAll] = useState(false)
+
+  const load = useCallback(async () => {
+    setLoading(true); setError(null)
+    try {
+      const r = await api.get(`/openshift/jobs/${jobId}/cluster`)
+      setData(r.data)
+    } catch (e) {
+      setError(e.response?.data?.error || 'Failed to reach cluster')
+    } finally {
+      setLoading(false)
+    }
+  }, [jobId])
+
+  useEffect(() => { load() }, [load])
+
+  const copyKubeconfig = async () => {
+    try {
+      const r = await api.get(`/openshift/jobs/${jobId}/kubeconfig`, { responseType: 'text' })
+      await navigator.clipboard.writeText(r.data)
+      setCopied(true)
+      setTimeout(() => setCopied(false), 2000)
+    } catch {/* ignore */}
+  }
+
+  const nodes     = data?.nodes     || []
+  const operators = data?.operators || []
+  const version   = data?.version
+
+  const opAvail   = operators.filter(o => o.available   === 'True').length
+  const opDegraded  = operators.filter(o => o.degraded  === 'True').length
+  const opProgress  = operators.filter(o => o.progressing === 'True').length
+  const degradedOps = operators.filter(o => o.degraded === 'True')
+  const shownOps  = showAll ? operators : operators.slice(0, 30)
+
+  return (
+    <div className="space-y-4">
+      {/* ── Cluster header ──────────────────────────────────────────── */}
+      <div className="bg-navy-800 border border-navy-600 rounded-xl p-4">
+        <div className="flex items-center gap-3 flex-wrap">
+          {version ? (
+            <span className="bg-sky-500/20 text-sky-300 text-xs font-semibold px-2.5 py-1 rounded-full">
+              OpenShift {version.version}
+            </span>
+          ) : null}
+          {version?.channel && (
+            <span className="bg-navy-700 text-slate-400 text-xs px-2.5 py-1 rounded-full border border-navy-600">
+              {version.channel}
+            </span>
+          )}
+          {nodes.length > 0 && (
+            <span className="bg-navy-700 text-slate-300 text-xs px-2.5 py-1 rounded-full border border-navy-600">
+              {nodes.length} node{nodes.length !== 1 ? 's' : ''}
+            </span>
+          )}
+          {operators.length > 0 && (
+            <span className={`text-xs px-2.5 py-1 rounded-full border ${
+              opDegraded > 0
+                ? 'bg-red-500/15 text-red-300 border-red-500/30'
+                : 'bg-green-500/15 text-green-300 border-green-500/30'
+            }`}>
+              {opAvail}/{operators.length} operators
+              {opDegraded > 0 && ` · ${opDegraded} degraded`}
+            </span>
+          )}
+          <div className="ml-auto flex items-center gap-2">
+            {jobResult?.console_url && (
+              <a href={jobResult.console_url} target="_blank" rel="noreferrer"
+                className="flex items-center gap-1.5 bg-sky-600 hover:bg-sky-500 text-white text-xs font-semibold px-3 py-1.5 rounded-md transition-colors">
+                <ExternalLink size={12} /> Console
+              </a>
+            )}
+            <button onClick={copyKubeconfig}
+              className="flex items-center gap-1.5 bg-navy-700 hover:bg-navy-600 border border-navy-600 text-slate-300 hover:text-white text-xs font-semibold px-3 py-1.5 rounded-md transition-colors">
+              {copied ? <Check size={12} className="text-green-400" /> : <Copy size={12} />}
+              {copied ? 'Copied' : 'Copy kubeconfig'}
+            </button>
+            <button onClick={load} title="Refresh"
+              className="p-1.5 bg-navy-700 hover:bg-navy-600 border border-navy-600 rounded-md text-slate-400 hover:text-white transition-colors">
+              <RefreshCw size={13} className={loading ? 'animate-spin' : ''} />
+            </button>
+          </div>
+        </div>
+
+        {jobResult?.api_url && (
+          <div className="mt-3 flex items-center gap-2 text-xs text-slate-500">
+            <span className="text-slate-600">API</span>
+            <code className="text-slate-400 font-mono">{jobResult.api_url}</code>
+          </div>
+        )}
+      </div>
+
+      {/* ── Loading / error ──────────────────────────────────────────── */}
+      {loading && (
+        <div className="flex items-center gap-2 text-slate-500 text-sm py-6 justify-center">
+          <Loader2 size={16} className="animate-spin" /> Querying cluster…
+        </div>
+      )}
+      {!loading && error && (
+        <div className="bg-red-500/10 border border-red-500/30 rounded-xl p-4 text-sm text-red-300 flex items-start gap-2">
+          <AlertTriangle size={15} className="flex-shrink-0 mt-0.5" />
+          <div>
+            <p className="font-medium">Could not reach cluster</p>
+            <p className="text-red-400/80 text-xs mt-1 font-mono">{error}</p>
+          </div>
+        </div>
+      )}
+
+      {/* ── Nodes ───────────────────────────────────────────────────── */}
+      {!loading && nodes.length > 0 && (
+        <div className="bg-navy-800 border border-navy-600 rounded-xl overflow-hidden">
+          <div className="px-4 py-3 border-b border-navy-700 flex items-center gap-2">
+            <Server size={14} className="text-slate-400" />
+            <span className="text-slate-200 text-sm font-semibold">Nodes</span>
+            <span className="ml-auto text-xs text-slate-500">{nodes.filter(n => n.ready === 'Ready').length}/{nodes.length} Ready</span>
+          </div>
+          <table className="w-full text-xs">
+            <thead>
+              <tr className="text-slate-500 border-b border-navy-700 bg-navy-900/40">
+                <th className="text-left py-2 px-4 font-medium">Name</th>
+                <th className="text-left py-2 px-4 font-medium">Role</th>
+                <th className="text-left py-2 px-4 font-medium">Status</th>
+                <th className="text-left py-2 px-4 font-medium">kubelet</th>
+              </tr>
+            </thead>
+            <tbody>
+              {nodes.map(node => (
+                <tr key={node.name} className="border-b border-navy-700/50 hover:bg-navy-700/20">
+                  <td className="py-2.5 px-4 font-mono text-slate-200">{node.name}</td>
+                  <td className="py-2.5 px-4">
+                    {node.roles.map(r => (
+                      <span key={r} className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-semibold mr-1 ${
+                        r === 'master' || r === 'control-plane'
+                          ? 'bg-purple-500/20 text-purple-300'
+                          : 'bg-blue-500/20 text-blue-300'
+                      }`}>{r}</span>
+                    ))}
+                  </td>
+                  <td className="py-2.5 px-4">
+                    <span className={`px-2 py-0.5 rounded text-[10px] font-semibold ${
+                      node.ready === 'Ready'
+                        ? 'bg-green-500/20 text-green-400'
+                        : node.ready === 'NotReady'
+                        ? 'bg-red-500/20 text-red-400'
+                        : 'bg-slate-500/20 text-slate-400'
+                    }`}>{node.ready}</span>
+                  </td>
+                  <td className="py-2.5 px-4 font-mono text-slate-500">{node.kubelet_version}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {/* ── Operators ───────────────────────────────────────────────── */}
+      {!loading && operators.length > 0 && (
+        <div className="bg-navy-800 border border-navy-600 rounded-xl overflow-hidden">
+          <div className="px-4 py-3 border-b border-navy-700 flex items-center gap-3 flex-wrap">
+            <Layers size={14} className="text-slate-400" />
+            <span className="text-slate-200 text-sm font-semibold">Cluster Operators</span>
+            <div className="flex items-center gap-3 ml-auto text-xs">
+              <span className="text-green-400">{opAvail} available</span>
+              {opProgress > 0 && <span className="text-amber-400">{opProgress} progressing</span>}
+              {opDegraded > 0 && <span className="text-red-400">{opDegraded} degraded</span>}
+            </div>
+          </div>
+
+          {/* Degraded operators highlighted first */}
+          {degradedOps.length > 0 && (
+            <div className="px-4 py-3 border-b border-navy-700 space-y-1.5">
+              {degradedOps.map(op => (
+                <div key={op.name} className="flex items-start gap-2 bg-red-500/10 border border-red-500/20 rounded-lg px-3 py-2">
+                  <XCircle size={12} className="text-red-400 flex-shrink-0 mt-0.5" />
+                  <div>
+                    <span className="text-red-300 text-xs font-semibold">{op.name}</span>
+                    {op.message && <p className="text-red-400/70 text-[10px] mt-0.5 font-mono">{op.message.slice(0, 120)}</p>}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* All operators grid */}
+          <div className="px-4 py-3">
+            <div className="flex flex-wrap gap-1.5">
+              {shownOps.map(op => {
+                const isDeg  = op.degraded    === 'True'
+                const isProg = op.progressing === 'True'
+                const isOk   = op.available   === 'True' && !isDeg
+                return (
+                  <span key={op.name} title={op.message || op.name}
+                    className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-medium border ${
+                      isDeg  ? 'bg-red-500/15 text-red-300 border-red-500/30' :
+                      isProg ? 'bg-amber-500/15 text-amber-300 border-amber-500/30' :
+                      isOk   ? 'bg-green-500/10 text-green-400 border-green-500/20' :
+                               'bg-slate-500/10 text-slate-500 border-slate-600/30'
+                    }`}>
+                    {isDeg ? '✗' : isProg ? '↻' : '✓'} {op.name}
+                  </span>
+                )
+              })}
+            </div>
+            {operators.length > 30 && (
+              <button onClick={() => setShowAll(s => !s)}
+                className="mt-2 text-xs text-slate-500 hover:text-sky-400 transition-colors">
+                {showAll ? '↑ Show less' : `↓ Show all ${operators.length}`}
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* ── Danger zone ─────────────────────────────────────────────── */}
+      <div className="bg-navy-800 border border-red-900/40 rounded-xl p-4">
+        <p className="text-xs text-slate-500 font-semibold uppercase tracking-wider mb-3">Danger Zone</p>
+        <div className="flex items-center justify-between">
+          <div>
+            <p className="text-slate-300 text-sm font-medium">Reinstall cluster</p>
+            <p className="text-slate-500 text-xs mt-0.5">Permanently destroys all VMs and starts a fresh deployment</p>
+          </div>
+          <button onClick={onReinstall}
+            className="flex items-center gap-1.5 bg-red-900/50 hover:bg-red-800/70 border border-red-700/50 text-red-300 text-xs font-semibold px-3 py-1.5 rounded-md transition-colors">
+            <RotateCcw size={12} /> Reinstall
+          </button>
         </div>
       </div>
     </div>
@@ -574,6 +854,7 @@ export default function OpenShiftJob() {
   const [syncing,    setSyncing]    = useState(false)
   const [retrying,   setRetrying]   = useState(false)
   const [resetOpen,  setResetOpen]  = useState(false)
+  const [activeTab,  setActiveTab]  = useState('deployment')
   const logRef              = useRef(null)
   const timerRef            = useRef(null)
 
@@ -725,11 +1006,12 @@ export default function OpenShiftJob() {
         />
       )}
 
-      {/* Reset modal */}
+      {/* Reset / Reinstall modal */}
       {resetOpen && (
         <ResetModal
           jobId={jobId}
           clusterName={job.config?.cluster_name || job.id}
+          isReinstall={isComplete}
           onClose={handleResetClose}
           onReset={handleResetDone}
         />
@@ -759,13 +1041,19 @@ export default function OpenShiftJob() {
           </div>
         </div>
         <div className="flex items-center gap-2">
-          {/* Reset button: shown for any non-complete job with a cluster_id */}
-          {!isComplete && job.cluster_id && (
+          {/* Reset / Reinstall button: shown for any job with a cluster_id */}
+          {job.cluster_id && (
             <button
               onClick={() => setResetOpen(true)}
-              title="Cancel installation, reset cluster, and reboot VMs into discovery mode"
-              className="flex items-center gap-1.5 bg-navy-700 hover:bg-red-900/60 border border-navy-600 hover:border-red-700/60 text-slate-400 hover:text-red-300 text-xs font-semibold px-3 py-1.5 rounded-md transition-colors">
-              <RotateCcw size={12} /> Reset
+              title={isComplete
+                ? 'Full teardown: destroy VMs, delete cluster, start fresh'
+                : 'Cancel installation, reset cluster, reboot VMs into discovery mode'}
+              className={`flex items-center gap-1.5 border text-xs font-semibold px-3 py-1.5 rounded-md transition-colors ${
+                isComplete
+                  ? 'bg-red-900/40 hover:bg-red-900/70 border-red-700/50 hover:border-red-600 text-red-300 hover:text-red-200'
+                  : 'bg-navy-700 hover:bg-red-900/60 border-navy-600 hover:border-red-700/60 text-slate-400 hover:text-red-300'
+              }`}>
+              <RotateCcw size={12} /> {isComplete ? 'Reinstall' : 'Reset'}
             </button>
           )}
 
@@ -808,6 +1096,37 @@ export default function OpenShiftJob() {
           )}
         </div>
       </div>
+
+      {/* ── Tab bar (shown when cluster tab is available) ─────────────── */}
+      {isComplete && (
+        <div className="flex gap-1 bg-navy-800 border border-navy-600 rounded-lg p-1 w-fit">
+          {[
+            { id: 'deployment', label: 'Deployment', Icon: Cpu },
+            { id: 'cluster',    label: 'Cluster',    Icon: Layers },
+          ].map(({ id, label, Icon }) => (
+            <button key={id} onClick={() => setActiveTab(id)}
+              className={`flex items-center gap-2 px-4 py-1.5 rounded text-sm font-medium transition-all ${
+                activeTab === id
+                  ? 'bg-sky-600 text-white shadow'
+                  : 'text-slate-400 hover:text-sky-300 hover:bg-navy-700'
+              }`}>
+              <Icon size={14} /> {label}
+            </button>
+          ))}
+        </div>
+      )}
+
+      {/* ── Cluster dashboard tab ─────────────────────────────────────── */}
+      {activeTab === 'cluster' && isComplete && (
+        <ClusterDashboard
+          jobId={jobId}
+          jobResult={job.result}
+          onReinstall={() => setResetOpen(true)}
+        />
+      )}
+
+      {/* ── Deployment tab content ────────────────────────────────────── */}
+      {(activeTab === 'deployment' || !isComplete) && (<>
 
       {/* ── Status banner ────────────────────────────────────────────── */}
       <div className={`flex items-center gap-4 bg-navy-800 border ${bannerBorder} rounded-xl p-4`}>
@@ -989,6 +1308,8 @@ export default function OpenShiftJob() {
           </a>
         </div>
       )}
+
+      </>)} {/* end deployment tab */}
     </div>
   )
 }
