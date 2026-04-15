@@ -5,7 +5,7 @@ import {
   Terminal, Download, Copy, Check, ExternalLink, RefreshCw,
   AlertTriangle, ChevronDown, ChevronRight,
   KeyRound, Disc3, Server, Network, Cpu, Trophy, ShieldCheck,
-  Upload, X,
+  Upload, X, Search, ChevronsDown, Maximize2, Minimize2,
 } from 'lucide-react'
 import api from '../api'
 
@@ -183,6 +183,203 @@ function WarningsPanel({ warnings, errors }) {
           ))}
         </div>
       )}
+    </div>
+  )
+}
+
+// ── Interactive deployment log ────────────────────────────────────────────────
+const LEVEL_COLOR = {
+  info:  'text-slate-300',
+  warn:  'text-yellow-300',
+  error: 'text-red-400',
+}
+const LEVEL_BADGE = {
+  warn:  'bg-yellow-500/20 text-yellow-300 border border-yellow-500/30',
+  error: 'bg-red-500/20 text-red-400 border border-red-500/30',
+}
+
+function DeployLog({ logs, isRunning }) {
+  const [filter,    setFilter]    = useState('all')   // all | info | warn | error
+  const [search,    setSearch]    = useState('')
+  const [expanded,  setExpanded]  = useState(false)
+  const [pinned,    setPinned]    = useState(true)    // auto-scroll to bottom
+  const [copied,    setCopied]    = useState(false)
+  const [newCount,  setNewCount]  = useState(0)       // entries added since unpin
+  const logRef    = useRef(null)
+  const prevLen   = useRef(0)
+
+  // Count by level
+  const warnCount  = useMemo(() => logs.filter(e => e.level === 'warn').length,  [logs])
+  const errorCount = useMemo(() => logs.filter(e => e.level === 'error').length, [logs])
+
+  // Filtered entries
+  const visible = useMemo(() => {
+    let out = logs
+    if (filter !== 'all') out = out.filter(e => e.level === filter)
+    if (search.trim())    out = out.filter(e => e.msg?.toLowerCase().includes(search.toLowerCase()))
+    return out
+  }, [logs, filter, search])
+
+  // Auto-scroll when pinned and new entries arrive
+  useEffect(() => {
+    if (logs.length !== prevLen.current) {
+      const added = logs.length - prevLen.current
+      prevLen.current = logs.length
+      if (!pinned) {
+        setNewCount(c => c + added)
+      }
+    }
+  }, [logs.length, pinned])
+
+  useEffect(() => {
+    if (pinned && logRef.current) {
+      logRef.current.scrollTop = logRef.current.scrollHeight
+    }
+  }, [visible.length, pinned])
+
+  // Detect manual scroll away from bottom → unpin
+  const handleScroll = () => {
+    const el = logRef.current
+    if (!el) return
+    const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 40
+    if (atBottom && !pinned) {
+      setPinned(true)
+      setNewCount(0)
+    } else if (!atBottom && pinned) {
+      setPinned(false)
+    }
+  }
+
+  const jumpToBottom = () => {
+    if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight
+    setPinned(true)
+    setNewCount(0)
+  }
+
+  const copyLogs = () => {
+    const text = logs.map(e => `[${e.level}] ${e.ts} ${e.msg}`).join('\n')
+    navigator.clipboard.writeText(text)
+    setCopied(true)
+    setTimeout(() => setCopied(false), 2000)
+  }
+
+  const height = expanded ? 'h-[36rem]' : 'h-80'
+
+  return (
+    <div className="bg-navy-900 border border-navy-600 rounded-xl overflow-hidden">
+
+      {/* ── Toolbar ── */}
+      <div className="px-3 py-2 border-b border-navy-700 flex items-center gap-2 flex-wrap">
+        <Terminal size={13} className="text-sky-400 flex-shrink-0" />
+        <span className="text-slate-300 text-xs font-semibold">Deployment Log</span>
+
+        {/* Level filter tabs */}
+        <div className="flex items-center gap-1 ml-1">
+          {[
+            { key: 'all',   label: `All ${logs.length}` },
+            { key: 'info',  label: `Info` },
+            { key: 'warn',  label: `⚠ ${warnCount}`,  disabled: warnCount === 0 },
+            { key: 'error', label: `✕ ${errorCount}`, disabled: errorCount === 0 },
+          ].map(({ key, label, disabled }) => (
+            <button key={key}
+              onClick={() => setFilter(key)}
+              disabled={disabled}
+              className={`px-2 py-0.5 rounded text-[11px] font-medium transition-colors disabled:opacity-30 ${
+                filter === key
+                  ? key === 'error' ? 'bg-red-500/25 text-red-300'
+                  : key === 'warn'  ? 'bg-yellow-500/25 text-yellow-300'
+                  : 'bg-sky-500/20 text-sky-300'
+                  : 'text-slate-500 hover:text-slate-300'
+              }`}>
+              {label}
+            </button>
+          ))}
+        </div>
+
+        {/* Search */}
+        <div className="relative flex items-center ml-1">
+          <Search size={11} className="absolute left-2 text-slate-600 pointer-events-none" />
+          <input
+            value={search}
+            onChange={e => setSearch(e.target.value)}
+            placeholder="Filter…"
+            className="bg-navy-800 border border-navy-600 rounded pl-6 pr-2 py-0.5 text-xs text-slate-300 placeholder-slate-600 focus:outline-none focus:border-sky-600 w-28"
+          />
+          {search && (
+            <button onClick={() => setSearch('')}
+              className="absolute right-1.5 text-slate-600 hover:text-slate-400">
+              <X size={10} />
+            </button>
+          )}
+        </div>
+
+        <div className="ml-auto flex items-center gap-1.5">
+          {/* Running indicator */}
+          {isRunning && (
+            <span className="flex items-center gap-1 text-[11px] text-slate-500">
+              <span className="w-1.5 h-1.5 bg-green-400 rounded-full animate-pulse" />
+              live
+            </span>
+          )}
+          {/* Copy */}
+          <button onClick={copyLogs} title="Copy all logs"
+            className="p-1.5 rounded text-slate-500 hover:text-slate-300 transition-colors">
+            {copied ? <Check size={12} className="text-green-400" /> : <Copy size={12} />}
+          </button>
+          {/* Expand / collapse */}
+          <button onClick={() => setExpanded(e => !e)} title={expanded ? 'Collapse' : 'Expand'}
+            className="p-1.5 rounded text-slate-500 hover:text-slate-300 transition-colors">
+            {expanded ? <Minimize2 size={12} /> : <Maximize2 size={12} />}
+          </button>
+        </div>
+      </div>
+
+      {/* ── Log body ── */}
+      <div className="relative">
+        <div
+          ref={logRef}
+          onScroll={handleScroll}
+          className={`${height} overflow-y-auto p-3 font-mono text-xs space-y-px transition-all duration-200`}
+        >
+          {visible.length === 0 && (
+            <span className="text-slate-600">
+              {search || filter !== 'all' ? 'No matching entries.' : 'Waiting for first log entry…'}
+            </span>
+          )}
+          {visible.map((entry, i) => (
+            <div key={i} className={`flex gap-2 items-baseline group py-px hover:bg-white/[0.03] rounded px-1 -mx-1 ${
+              LEVEL_COLOR[entry.level] || 'text-slate-300'
+            }`}>
+              <span className="text-slate-600 flex-shrink-0 w-14 text-right">{entry.ts}</span>
+              {entry.level !== 'info' && (
+                <span className={`flex-shrink-0 text-[10px] px-1 rounded font-semibold ${LEVEL_BADGE[entry.level] || ''}`}>
+                  {entry.level?.toUpperCase()}
+                </span>
+              )}
+              <span className="break-all leading-relaxed">{entry.msg}</span>
+            </div>
+          ))}
+        </div>
+
+        {/* Jump-to-bottom button when unpinned */}
+        {!pinned && (
+          <button
+            onClick={jumpToBottom}
+            className="absolute bottom-3 right-3 flex items-center gap-1.5 bg-sky-600 hover:bg-sky-500 text-white text-[11px] font-semibold px-2.5 py-1.5 rounded-full shadow-lg transition-colors"
+          >
+            <ChevronsDown size={12} />
+            {newCount > 0 ? `${newCount} new` : 'Latest'}
+          </button>
+        )}
+      </div>
+
+      {/* ── Status bar ── */}
+      <div className="px-3 py-1.5 border-t border-navy-800 flex items-center gap-3 text-[11px] text-slate-600">
+        <span>{visible.length}{visible.length !== logs.length ? ` / ${logs.length}` : ''} entries</span>
+        {warnCount  > 0 && <span className="text-yellow-500/70">⚠ {warnCount} warning{warnCount  > 1 ? 's' : ''}</span>}
+        {errorCount > 0 && <span className="text-red-500/70">✕ {errorCount} error{errorCount > 1 ? 's' : ''}</span>}
+        <span className="ml-auto">{pinned ? '↓ auto-scroll on' : '⏸ auto-scroll paused'}</span>
+      </div>
     </div>
   )
 }
@@ -396,8 +593,6 @@ export default function OpenShiftJob() {
   const isRunning  = !isComplete && !isFailed
   const progress   = job.progress ?? 0
 
-  const LOG_COLOR = { info: 'text-slate-300', warn: 'text-yellow-300', error: 'text-red-400' }
-
   // ISO download: progress updates from 22→32 during download
   const isDownloadingISO = isRunning && (job.phase || '').includes('Downloading')
   const isoDownloadPct = isDownloadingISO ? Math.min(100, Math.round((progress - 22) / 10 * 100)) : null
@@ -605,24 +800,7 @@ export default function OpenShiftJob() {
       )}
 
       {/* ── Deployment log ────────────────────────────────────────────── */}
-      <div className="bg-navy-900 border border-navy-600 rounded-xl overflow-hidden">
-        <div className="px-4 py-3 border-b border-navy-700 flex items-center gap-2">
-          <Terminal size={13} className="text-sky-400" />
-          <span className="text-slate-300 text-xs font-semibold">Deployment Log</span>
-          <span className="text-slate-600 text-xs ml-auto">{job.logs?.length ?? 0} entries</span>
-        </div>
-        <div ref={logRef} className="p-4 h-80 overflow-y-auto font-mono text-xs space-y-0.5">
-          {(job.logs || []).map((entry, i) => (
-            <div key={i} className={`flex gap-2 ${LOG_COLOR[entry.level] || 'text-slate-300'}`}>
-              <span className="text-slate-600 flex-shrink-0">{entry.ts}</span>
-              <span className="break-all">{entry.msg}</span>
-            </div>
-          ))}
-          {!job.logs?.length && (
-            <span className="text-slate-600">Waiting for first log entry…</span>
-          )}
-        </div>
-      </div>
+      <DeployLog logs={job.logs || []} isRunning={isRunning} />
 
       {/* ── Results (complete) ───────────────────────────────────────── */}
       {isComplete && job.result && (
