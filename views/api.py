@@ -107,7 +107,7 @@ def host_info():
         return err
 
     conn = get_db_connection()
-    host_info = {}
+    host_info = {'hostname': os.uname().nodename}
 
     if conn:
         try:

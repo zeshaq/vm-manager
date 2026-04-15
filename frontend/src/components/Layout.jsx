@@ -1,5 +1,6 @@
 import { NavLink, useLocation } from 'react-router-dom'
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
+import api from '../api'
 import {
   LayoutDashboard,
   Server,
@@ -111,6 +112,11 @@ function NavGroupLabel({ label }) {
 
 export default function Layout({ children, username, onLogout }) {
   const location = useLocation()
+  const [hostname, setHostname] = useState('')
+
+  useEffect(() => {
+    api.get('/host').then(r => setHostname(r.data.hostname || '')).catch(() => {})
+  }, [])
 
   const getPageTitle = () => {
     const p = location.pathname
@@ -144,10 +150,15 @@ export default function Layout({ children, username, onLogout }) {
       <aside className="w-64 bg-navy-800 border-r border-navy-400 flex flex-col flex-shrink-0">
         {/* Logo */}
         <div className="px-6 py-5 border-b border-navy-400">
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-3 mb-2">
             <img src="/logo.svg" alt="Hypercloud" className="w-8 h-8" />
             <span className="text-sky-400 font-bold text-lg tracking-tight">Hypercloud</span>
           </div>
+          {hostname && (
+            <div className="text-slate-100 font-bold text-base tracking-tight truncate" title={hostname}>
+              {hostname}
+            </div>
+          )}
         </div>
 
         {/* Nav */}
