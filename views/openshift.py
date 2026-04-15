@@ -903,6 +903,9 @@ def _run_deploy(job_id: str, cfg: dict):
                 extra_info = f' + {len(extra_paths)} extra disk(s)' if extra_paths else ''
                 mac_info   = f', MAC {mac_map[vm_name]}' if vm_name in mac_map else ''
                 log(f'VM {vm_name} started ({vcpus} vCPU, {ram_mb//1024} GB RAM, {disk_gb} GB{extra_info}, {role}{mac_info}) ✓')
+                # Stagger starts so the host isn't overwhelmed with simultaneous boot I/O
+                if i < len(vm_names) - 1:
+                    time.sleep(15)
 
         except Exception as e:
             conn.close()
@@ -916,7 +919,7 @@ def _run_deploy(job_id: str, cfg: dict):
         # ── Step 6: Wait for host discovery ──────────────────────────────────
         phase('Waiting for nodes to register', 45)
         log(f'Waiting for {total_nodes} node(s) to boot and register…')
-        deadline = time.time() + 30 * 60   # 30 min timeout
+        deadline = time.time() + 45 * 60   # 45 min timeout
         registered = []
 
         while time.time() < deadline:
@@ -929,6 +932,35 @@ def _run_deploy(job_id: str, cfg: dict):
                 known_count = len(registered)
                 log(f'  {known_count}/{total_nodes} node(s) discovered')
                 _job_set(job_id, progress=45 + min(known_count, total_nodes) * 3)
+
+                # Log which VMs haven't shown up yet
+                if known_count < total_nodes:
+                    registered_names = {h.get('requested_hostname', '') for h in registered}
+                    missing = [n for n in vm_names if not any(n in rn for rn in registered_names)]
+                    if missing:
+                        # Check libvirt state so we know if they crashed vs. still booting
+                        try:
+                            lv = libvirt.open('qemu:///system')
+                            for vm in missing:
+                                try:
+                                    d = lv.lookupByName(vm)
+                                    state_map = {0: 'nostate', 1: 'running', 2: 'blocked',
+                                                 3: 'paused', 4: 'shutdown', 5: 'shutoff', 6: 'crashed'}
+                                    st = state_map.get(d.state()[0], 'unknown')
+                                    if st not in ('running',):
+                                        log(f'  WARNING: {vm} is {st} — attempting restart', 'warn')
+                                        try:
+                                            if d.isActive(): d.destroy()
+                                            d.create()
+                                        except Exception:
+                                            pass
+                                    else:
+                                        log(f'  {vm}: running, still booting…')
+                                except libvirt.libvirtError:
+                                    log(f'  {vm}: not found in libvirt', 'warn')
+                            lv.close()
+                        except Exception:
+                            pass
 
                 if known_count >= total_nodes:
                     # Check all are in a ready-ish state
