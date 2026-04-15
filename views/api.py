@@ -758,6 +758,7 @@ def attach_cloud_image(uuid):
 hostname: {vm_name}
 users:
   - name: ze
+    groups: sudo,adm,wheel
     sudo: ALL=(ALL) NOPASSWD:ALL
     shell: /bin/bash
     lock_passwd: false
@@ -765,6 +766,10 @@ users:
 chpasswd:
   expire: false
 ssh_pwauth: true
+write_files:
+  - path: /etc/sudoers.d/ze
+    content: "ze ALL=(ALL) NOPASSWD:ALL\\n"
+    permissions: '0440'
 runcmd:
   - touch /etc/cloud/cloud-init.disabled
   - systemctl disable cloud-init cloud-init-local cloud-config cloud-final 2>/dev/null || true
