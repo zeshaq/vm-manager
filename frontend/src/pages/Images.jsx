@@ -81,7 +81,7 @@ function ProgressBar({ jobId, onDone }) {
 }
 
 function prepareScript(image) {
-  return `sudo virt-customize -a ${image.path} \\
+  return `virt-customize -a ${image.path} \\
   --run-command 'useradd -m -s /bin/bash ze || true' \\
   --password ze:password:ze \\
   --run-command 'usermod -aG sudo,adm,wheel ze 2>/dev/null || true' \\

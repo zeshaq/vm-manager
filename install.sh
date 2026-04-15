@@ -84,6 +84,7 @@ PACKAGES=(
   cloud-image-utils   # cloud-localds — build cloud-init ISOs
   qemu-utils          # qemu-img — thin-provision VM disks
   openssh-client      # ssh + ssh-keygen — cluster node access
+  libguestfs-tools    # virt-customize — pre-bake credentials into cloud images
 )
 
 apt-get install -y "${PACKAGES[@]}"

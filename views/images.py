@@ -515,12 +515,16 @@ def run_script(image_id):
 
     def generate():
         try:
+            env = os.environ.copy()
+            env['LIBGUESTFS_BACKEND'] = 'direct'   # allow virt-customize without KVM nesting
+            env['SUDO_ASKPASS'] = '/bin/false'      # prevent sudo from hanging on askpass
             proc = subprocess.Popen(
-                ['bash', '-c', script],
+                ['sudo', '-n', 'bash', '-c', script],
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,
                 bufsize=1,
+                env=env,
             )
             for line in proc.stdout:
                 yield f'data: {json.dumps({"line": line.rstrip()})}\n\n'
