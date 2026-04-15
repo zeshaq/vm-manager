@@ -128,6 +128,14 @@ function ImageCard({ image, onDeleted }) {
       body: JSON.stringify({ script }),
       credentials: 'same-origin',
     }).then(async res => {
+      // Non-streaming error (e.g. 409 image locked)
+      if (!res.ok || res.headers.get('content-type')?.includes('application/json')) {
+        const data = await res.json().catch(() => ({}))
+        setOutput([data.error || `HTTP ${res.status}`])
+        setRunStatus('error')
+        setRunning(false)
+        return
+      }
       const reader = res.body.getReader()
       const decoder = new TextDecoder()
       let buf = ''

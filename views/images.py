@@ -513,6 +513,24 @@ def run_script(image_id):
     if not img:
         return jsonify({'error': 'Image not found'}), 404
 
+    # Check if the image file is locked by a running VM
+    img_path = img.get('path', '')
+    if img_path:
+        try:
+            lsof = subprocess.run(
+                ['sudo', '-n', 'lsof', img_path],
+                capture_output=True, text=True, timeout=5,
+            )
+            if lsof.returncode == 0 and lsof.stdout.strip():
+                lines = lsof.stdout.strip().splitlines()
+                pids = [l.split()[1] for l in lines[1:] if l.strip()]
+                return jsonify({
+                    'error': f'Image is locked by a running VM (PID {", ".join(pids)}). '
+                             f'Shut down all VMs that use this image as a backing file, then try again.'
+                }), 409
+        except Exception:
+            pass
+
     def generate():
         try:
             env = os.environ.copy()
