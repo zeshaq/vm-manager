@@ -600,7 +600,8 @@ Warning: if the config is invalid or changes the IP, you may lose remote access.
   --run-command 'systemctl disable cloud-init cloud-init-local cloud-config cloud-final 2>/dev/null || true' \\
   --run-command 'touch /etc/cloud/cloud-init.disabled' \\
   --run-command 'mkdir -p /etc/netplan && printf "network:\\n  version: 2\\n  ethernets:\\n    all-en:\\n      match:\\n        name: \\"en*\\"\\n      dhcp4: true\\n    all-eth:\\n      match:\\n        name: \\"eth*\\"\\n      dhcp4: true\\n" > /etc/netplan/99-dhcp.yaml && chmod 600 /etc/netplan/99-dhcp.yaml' \\
-  --run-command 'ln -sf /run/systemd/resolve/stub-resolv.conf /etc/resolv.conf' \\
+  --run-command 'mkdir -p /etc/NetworkManager/system-connections && printf "[connection]\\nid=dhcp\\ntype=ethernet\\nautoconnect=true\\n\\n[ipv4]\\nmethod=auto\\n\\n[ipv6]\\nmethod=auto\\n" > /etc/NetworkManager/system-connections/dhcp.nmconnection && chmod 600 /etc/NetworkManager/system-connections/dhcp.nmconnection' \\
+  --run-command 'test -f /etc/systemd/resolved.conf && ln -sf /run/systemd/resolve/stub-resolv.conf /etc/resolv.conf || true' \\
   --run-command 'systemctl enable qemu-guest-agent 2>/dev/null || true' \\
   --run-command 'systemctl enable ssh 2>/dev/null || systemctl enable sshd 2>/dev/null || true' \\
   --run-command 'rm -f /etc/ssh/ssh_host_*' \\
