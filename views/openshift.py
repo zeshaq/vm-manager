@@ -460,10 +460,45 @@ def delete_job(job_id):
     err = _auth()
     if err:
         return err
+
+    with _lock:
+        job = _jobs.get(job_id, {})
+
+    vm_names     = job.get('vms', [])
+    storage_path = Path(job.get('config', {}).get('storage_path', '/var/lib/libvirt/images'))
+    deleted_vms, deleted_disks = [], []
+
+    if vm_names:
+        try:
+            conn = libvirt.open('qemu:///system')
+            for vm_name in vm_names:
+                try:
+                    dom = conn.lookupByName(vm_name)
+                    if dom.isActive():
+                        dom.destroy()
+                    dom.undefine()
+                    deleted_vms.append(vm_name)
+                except libvirt.libvirtError:
+                    pass  # VM already gone
+
+            conn.close()
+        except Exception:
+            pass
+
+        # Remove disk files (primary + extra disks)
+        for vm_name in vm_names:
+            for disk in storage_path.glob(f'{vm_name}*.qcow2'):
+                try:
+                    disk.unlink()
+                    deleted_disks.append(str(disk))
+                except OSError:
+                    pass
+
     with _lock:
         _jobs.pop(job_id, None)
         _save_jobs()
-    return jsonify({'ok': True})
+
+    return jsonify({'ok': True, 'deleted_vms': deleted_vms, 'deleted_disks': deleted_disks})
 
 
 # ── CDROM eject helper ───────────────────────────────────────────────────────
