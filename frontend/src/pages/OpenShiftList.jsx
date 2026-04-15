@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import {
   Boxes, PlusCircle, RefreshCw, Trash2, CheckCircle,
   XCircle, Loader2, Clock, ChevronRight, AlertTriangle,
+  HardDrive, Download, ChevronDown,
 } from 'lucide-react'
 import api from '../api'
 
@@ -45,6 +46,153 @@ function timeAgo(ts) {
 }
 
 // ── main component ────────────────────────────────────────────────────────────
+
+function fmtBytes(b) {
+  if (!b) return '—'
+  if (b > 1024 ** 3) return `${(b / 1024 ** 3).toFixed(1)} GB`
+  return `${(b / 1024 ** 2).toFixed(0)} MB`
+}
+
+function IsoCachePanel() {
+  const [isos, setIsos]           = useState([])
+  const [open, setOpen]           = useState(false)
+  const [showForm, setShowForm]   = useState(false)
+  const [versions, setVersions]   = useState([])
+  const [form, setForm]           = useState({ ocp_version: '', pull_secret: '', ssh_public_key: '' })
+  const [fetching, setFetching]   = useState(false)
+  const [deleting, setDeleting]   = useState(null)
+  const [pollFp, setPollFp]       = useState(null)
+
+  const loadIsos = useCallback(async () => {
+    try { const r = await api.get('/openshift/isos'); setIsos(r.data.isos || []) } catch (_) {}
+  }, [])
+
+  useEffect(() => { loadIsos() }, [loadIsos])
+
+  // Poll until the pre-fetching ISO appears
+  useEffect(() => {
+    if (!pollFp) return
+    const t = setInterval(async () => {
+      await loadIsos()
+      setIsos(prev => {
+        const found = prev.find(i => i.fingerprint === pollFp && i.exists)
+        if (found) { setPollFp(null); setFetching(false) }
+        return prev
+      })
+    }, 3000)
+    return () => clearInterval(t)
+  }, [pollFp, loadIsos])
+
+  useEffect(() => {
+    if (!open || versions.length) return
+    api.get('/openshift/versions').then(r => setVersions(r.data.versions || [])).catch(() => {})
+  }, [open, versions.length])
+
+  const prefetch = async () => {
+    if (!form.ocp_version || !form.pull_secret) return
+    setFetching(true)
+    try {
+      const r = await api.post('/openshift/isos/prefetch', form)
+      if (r.data.status === 'cached') { await loadIsos(); setFetching(false) }
+      else setPollFp(r.data.fingerprint)
+      setShowForm(false)
+    } catch (e) {
+      alert(e.response?.data?.error || 'Pre-fetch failed')
+      setFetching(false)
+    }
+  }
+
+  const deleteIso = async (fp) => {
+    setDeleting(fp)
+    try { await api.delete(`/openshift/isos/${fp}`); await loadIsos() } catch (_) {}
+    setDeleting(null)
+  }
+
+  return (
+    <div className="bg-navy-800 border border-navy-600 rounded-xl overflow-hidden">
+      <button
+        onClick={() => setOpen(o => !o)}
+        className="w-full flex items-center justify-between px-5 py-3.5 hover:bg-navy-700/50 transition-colors">
+        <div className="flex items-center gap-2 text-slate-300 text-sm font-medium">
+          <HardDrive size={15} className="text-sky-400" />
+          Discovery ISO Cache
+          {isos.length > 0 && (
+            <span className="text-xs bg-sky-500/20 text-sky-300 px-2 py-0.5 rounded-full">{isos.length}</span>
+          )}
+        </div>
+        <ChevronDown size={14} className={`text-slate-500 transition-transform ${open ? 'rotate-180' : ''}`} />
+      </button>
+
+      {open && (
+        <div className="border-t border-navy-600 p-4 space-y-3">
+          <p className="text-slate-500 text-xs">
+            Pre-download discovery ISOs so deployments skip the download step. ISOs are reused automatically
+            when OCP version, pull secret, and SSH key match.
+          </p>
+
+          {isos.length > 0 && (
+            <div className="space-y-2">
+              {isos.map(iso => (
+                <div key={iso.fingerprint} className="flex items-center justify-between bg-navy-700 rounded-lg px-3 py-2.5">
+                  <div className="flex items-center gap-3">
+                    <div className={`w-2 h-2 rounded-full ${iso.exists ? 'bg-green-400' : 'bg-yellow-400 animate-pulse'}`} />
+                    <div>
+                      <div className="text-slate-200 text-sm font-medium">{iso.ocp_version}</div>
+                      <div className="text-slate-500 text-xs font-mono">
+                        {iso.exists ? fmtBytes(iso.size) : 'downloading…'} · {iso.ps_hint}
+                        {' · '}{Math.floor((Date.now() / 1000 - iso.downloaded_at) / 3600)}h ago
+                      </div>
+                    </div>
+                  </div>
+                  <button onClick={() => deleteIso(iso.fingerprint)} disabled={deleting === iso.fingerprint}
+                    className="p-1.5 rounded text-slate-500 hover:text-red-400 hover:bg-red-500/10 transition-colors">
+                    {deleting === iso.fingerprint ? <Loader2 size={13} className="animate-spin" /> : <Trash2 size={13} />}
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {showForm ? (
+            <div className="bg-navy-700 rounded-lg p-3 space-y-2">
+              <select value={form.ocp_version} onChange={e => setForm(f => ({ ...f, ocp_version: e.target.value }))}
+                className="w-full bg-navy-800 border border-navy-500 text-slate-200 text-sm rounded px-2 py-1.5">
+                <option value="">Select OCP version…</option>
+                {versions.map(v => <option key={v} value={v}>{v}</option>)}
+              </select>
+              <textarea
+                rows={3}
+                placeholder="Pull secret (paste from cloud.redhat.com)"
+                value={form.pull_secret}
+                onChange={e => setForm(f => ({ ...f, pull_secret: e.target.value }))}
+                className="w-full bg-navy-800 border border-navy-500 text-slate-200 text-xs rounded px-2 py-1.5 font-mono resize-none"
+              />
+              <input
+                placeholder="SSH public key (optional)"
+                value={form.ssh_public_key}
+                onChange={e => setForm(f => ({ ...f, ssh_public_key: e.target.value }))}
+                className="w-full bg-navy-800 border border-navy-500 text-slate-200 text-sm rounded px-2 py-1.5"
+              />
+              <div className="flex gap-2">
+                <button onClick={prefetch} disabled={fetching || !form.ocp_version || !form.pull_secret}
+                  className="flex items-center gap-1.5 bg-sky-600 hover:bg-sky-500 text-white text-sm px-3 py-1.5 rounded disabled:opacity-50">
+                  {fetching ? <Loader2 size={13} className="animate-spin" /> : <Download size={13} />}
+                  {fetching ? 'Downloading…' : 'Download ISO'}
+                </button>
+                <button onClick={() => setShowForm(false)} className="text-slate-400 text-sm px-3 py-1.5">Cancel</button>
+              </div>
+            </div>
+          ) : (
+            <button onClick={() => setShowForm(true)}
+              className="flex items-center gap-1.5 text-sky-400 hover:text-sky-300 text-sm transition-colors">
+              <Download size={13} /> Pre-fetch ISO
+            </button>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
 
 export default function OpenShiftList() {
   const navigate = useNavigate()
@@ -236,6 +384,9 @@ export default function OpenShiftList() {
           </table>
         )}
       </div>
+
+      {/* ISO cache panel */}
+      <IsoCachePanel />
 
       {/* Warning if running jobs */}
       {running > 0 && (

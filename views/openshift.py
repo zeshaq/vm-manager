@@ -51,8 +51,68 @@ ocp_bp = Blueprint('openshift', __name__)
 AI_BASE  = 'https://api.openshift.com/api/assisted-install/v2'
 SSO_URL  = ('https://sso.redhat.com/auth/realms/redhat-external'
             '/protocol/openid-connect/token')
-WORK_DIR  = Path.home() / 'hypercloud' / 'openshift'
-_JOBS_FILE = WORK_DIR / 'jobs.json'
+WORK_DIR      = Path.home() / 'hypercloud' / 'openshift'
+_JOBS_FILE    = WORK_DIR / 'jobs.json'
+ISO_CACHE_DIR = WORK_DIR / 'iso-cache'
+_ISO_CACHE_FILE = ISO_CACHE_DIR / 'cache.json'
+
+_iso_cache: dict = {}   # fingerprint → {infra_env_id, iso_path, ocp_version, downloaded_at}
+_iso_lock = threading.Lock()
+
+
+def _iso_fingerprint(ocp_version: str, pull_secret: str, ssh_public_key: str) -> str:
+    """Stable key for an (version, pull_secret, ssh_key) combination."""
+    raw = f'{ocp_version}|{pull_secret.strip()}|{ssh_public_key.strip()}'
+    return hashlib.sha256(raw.encode()).hexdigest()[:16]
+
+
+def _load_iso_cache():
+    global _iso_cache
+    try:
+        ISO_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        if _ISO_CACHE_FILE.exists():
+            with open(_ISO_CACHE_FILE) as f:
+                _iso_cache = json.load(f)
+    except Exception:
+        _iso_cache = {}
+
+
+def _save_iso_cache():
+    try:
+        ISO_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        with open(_ISO_CACHE_FILE, 'w') as f:
+            json.dump(_iso_cache, f, indent=2)
+    except Exception:
+        pass
+
+
+def _get_cached_iso(fingerprint: str):
+    """Return (infra_env_id, iso_path) if a valid cached ISO exists, else (None, None)."""
+    with _iso_lock:
+        entry = _iso_cache.get(fingerprint)
+    if not entry:
+        return None, None
+    iso_path = Path(entry['iso_path'])
+    if not iso_path.exists():
+        return None, None
+    return entry['infra_env_id'], iso_path
+
+
+def _store_iso_cache(fingerprint: str, infra_env_id: str, iso_path: Path,
+                     ocp_version: str, pull_secret: str, ssh_public_key: str):
+    with _iso_lock:
+        _iso_cache[fingerprint] = {
+            'infra_env_id':   infra_env_id,
+            'iso_path':       str(iso_path),
+            'ocp_version':    ocp_version,
+            'downloaded_at':  time.time(),
+            'ps_hint':        pull_secret.strip()[:6] + '…',
+            'ssh_hint':       (ssh_public_key.strip()[:30] + '…') if ssh_public_key.strip() else '',
+        }
+        _save_iso_cache()
+
+
+_load_iso_cache()
 
 # per-job dict: job_id → { status, logs, progress, phase, result, config }
 _jobs: dict = {}
@@ -756,8 +816,12 @@ def _run_deploy(job_id: str, cfg: dict):
 
         _job_set(job_id, cluster_id=cluster_id)
 
-        # ── Step 3: Create infra-env ──────────────────────────────────────────
+        # ── Step 3: Create infra-env (or reuse cached) ───────────────────────
         phase('Creating infrastructure environment', 18)
+        iso_fingerprint = _iso_fingerprint(
+            cfg['ocp_version'], cfg['pull_secret'], cfg.get('ssh_public_key', '')
+        )
+        cached_infra_env_id, cached_iso_path = _get_cached_iso(iso_fingerprint)
         infra_payload = {
             'name':              f'{cluster_name}-infra',
             'cluster_id':        cluster_id,
@@ -802,48 +866,56 @@ def _run_deploy(job_id: str, cfg: dict):
             else:
                 log('Static IP enabled but no node IPs provided — falling back to DHCP', 'warn')
 
-        try:
-            r = _ai('POST', '/infra-envs', token, infra_payload)
-            infra_env_id   = r.json()['id']
-            log(f'Infra-env created: {infra_env_id} ✓')
-        except Exception as e:
-            fail(f'Failed to create infra-env: {e}')
-            return
+        if cached_infra_env_id:
+            infra_env_id = cached_infra_env_id
+            iso_path     = cached_iso_path
+            log(f'Using cached infra-env {infra_env_id} and ISO ✓ (skipping download)')
+            phase('Using cached discovery ISO', 32)
+        else:
+            try:
+                r = _ai('POST', '/infra-envs', token, infra_payload)
+                infra_env_id = r.json()['id']
+                log(f'Infra-env created: {infra_env_id} ✓')
+            except Exception as e:
+                fail(f'Failed to create infra-env: {e}')
+                return
 
-        # ── Step 4: Download discovery ISO ───────────────────────────────────
-        phase('Downloading discovery ISO', 22)
-        iso_path = job_dir / 'discovery.iso'
-        try:
-            r = _ai('GET', f'/infra-envs/{infra_env_id}/downloads/image-url', token)
-            iso_url = r.json()['url']
-            log(f'ISO URL obtained, downloading (~100 MB)…')
-            with _req.get(iso_url, stream=True, timeout=300) as dl:
-                dl.raise_for_status()
-                total = int(dl.headers.get('content-length', 0))
-                done  = 0
-                with open(iso_path, 'wb') as f:
-                    for chunk in dl.iter_content(chunk_size=1024 * 1024):
-                        f.write(chunk)
-                        done += len(chunk)
-                        if total:
-                            pct = 22 + int(done / total * 10)
-                            _job_set(job_id, progress=pct)
-            log(f'ISO downloaded: {iso_path} ✓')
-            # QEMU runs as libvirt-qemu and can't read files in a user home dir
-            # unless the file and all parent directories are world-readable.
-            os.chmod(iso_path, 0o644)
-            # Walk up to WORK_DIR making sure each dir is o+x so qemu can traverse
-            p = iso_path.parent
-            while p != WORK_DIR.parent:
-                try:
-                    current = p.stat().st_mode
-                    os.chmod(p, current | 0o111)  # add execute/search for all
-                except Exception:
-                    pass
-                p = p.parent
-        except Exception as e:
-            fail(f'ISO download failed: {e}')
-            return
+            # ── Step 4: Download discovery ISO ───────────────────────────────
+            phase('Downloading discovery ISO', 22)
+            iso_path = ISO_CACHE_DIR / iso_fingerprint / 'discovery.iso'
+            iso_path.parent.mkdir(parents=True, exist_ok=True)
+            try:
+                r = _ai('GET', f'/infra-envs/{infra_env_id}/downloads/image-url', token)
+                iso_url = r.json()['url']
+                log(f'ISO URL obtained, downloading (~100 MB)…')
+                with _req.get(iso_url, stream=True, timeout=300) as dl:
+                    dl.raise_for_status()
+                    total = int(dl.headers.get('content-length', 0))
+                    done  = 0
+                    with open(iso_path, 'wb') as f:
+                        for chunk in dl.iter_content(chunk_size=1024 * 1024):
+                            f.write(chunk)
+                            done += len(chunk)
+                            if total:
+                                pct = 22 + int(done / total * 10)
+                                _job_set(job_id, progress=pct)
+                log(f'ISO downloaded and cached ✓')
+                # QEMU runs as libvirt-qemu — ensure file + parent dirs are world-readable
+                os.chmod(iso_path, 0o644)
+                p = iso_path.parent
+                while p != WORK_DIR.parent:
+                    try:
+                        os.chmod(p, p.stat().st_mode | 0o111)
+                    except Exception:
+                        pass
+                    p = p.parent
+                # Save to cache for future deployments
+                _store_iso_cache(iso_fingerprint, infra_env_id, iso_path,
+                                 cfg['ocp_version'], cfg['pull_secret'],
+                                 cfg.get('ssh_public_key', ''))
+            except Exception as e:
+                fail(f'ISO download failed: {e}')
+                return
 
         # ── Step 5: Create VMs ────────────────────────────────────────────────
         phase('Creating KVM virtual machines', 35)
@@ -1158,6 +1230,116 @@ def _run_deploy(job_id: str, cfg: dict):
 
 
 # ── Kubeconfig download ───────────────────────────────────────────────────────
+
+# ── ISO cache management ──────────────────────────────────────────────────────
+
+@ocp_bp.route('/api/openshift/isos')
+def list_isos():
+    err = _auth()
+    if err:
+        return err
+    with _iso_lock:
+        entries = []
+        for fp, entry in _iso_cache.items():
+            iso_path = Path(entry['iso_path'])
+            entries.append({
+                'fingerprint':   fp,
+                'ocp_version':   entry.get('ocp_version'),
+                'downloaded_at': entry.get('downloaded_at'),
+                'ps_hint':       entry.get('ps_hint'),
+                'ssh_hint':      entry.get('ssh_hint'),
+                'size':          iso_path.stat().st_size if iso_path.exists() else 0,
+                'exists':        iso_path.exists(),
+            })
+    return jsonify({'isos': entries})
+
+
+@ocp_bp.route('/api/openshift/isos/prefetch', methods=['POST'])
+def prefetch_iso():
+    """Pre-download a discovery ISO so the next deployment can skip the download step."""
+    err = _auth()
+    if err:
+        return err
+
+    data           = request.get_json() or {}
+    ocp_version    = data.get('ocp_version', '').strip()
+    pull_secret    = data.get('pull_secret', '').strip()
+    ssh_public_key = data.get('ssh_public_key', '').strip()
+
+    if not ocp_version or not pull_secret:
+        return jsonify({'error': 'ocp_version and pull_secret required'}), 400
+
+    fingerprint = _iso_fingerprint(ocp_version, pull_secret, ssh_public_key)
+    cached_id, cached_path = _get_cached_iso(fingerprint)
+    if cached_id:
+        return jsonify({'status': 'cached', 'fingerprint': fingerprint,
+                        'infra_env_id': cached_id, 'iso_path': str(cached_path)})
+
+    def _do_prefetch():
+        try:
+            token = _get_access_token(pull_secret)
+            infra_payload = {
+                'name':              f'prefetch-{ocp_version}-{fingerprint[:6]}',
+                'openshift_version': ocp_version,
+                'pull_secret':       pull_secret,
+                'image_type':        'minimal-iso',
+                'cpu_architecture':  'x86_64',
+            }
+            if ssh_public_key:
+                infra_payload['ssh_authorized_key'] = ssh_public_key
+
+            r = _ai('POST', '/infra-envs', token, infra_payload)
+            infra_env_id = r.json()['id']
+
+            r = _ai('GET', f'/infra-envs/{infra_env_id}/downloads/image-url', token)
+            iso_url = r.json()['url']
+
+            iso_path = ISO_CACHE_DIR / fingerprint / 'discovery.iso'
+            iso_path.parent.mkdir(parents=True, exist_ok=True)
+
+            with _req.get(iso_url, stream=True, timeout=300) as dl:
+                dl.raise_for_status()
+                with open(iso_path, 'wb') as f:
+                    for chunk in dl.iter_content(chunk_size=1024 * 1024):
+                        f.write(chunk)
+
+            os.chmod(iso_path, 0o644)
+            p = iso_path.parent
+            while p != WORK_DIR.parent:
+                try:
+                    os.chmod(p, p.stat().st_mode | 0o111)
+                except Exception:
+                    pass
+                p = p.parent
+
+            _store_iso_cache(fingerprint, infra_env_id, iso_path,
+                             ocp_version, pull_secret, ssh_public_key)
+        except Exception as e:
+            pass  # errors visible on next list_isos call
+
+    threading.Thread(target=_do_prefetch, daemon=True).start()
+    return jsonify({'status': 'downloading', 'fingerprint': fingerprint}), 202
+
+
+@ocp_bp.route('/api/openshift/isos/<fingerprint>', methods=['DELETE'])
+def delete_iso(fingerprint):
+    err = _auth()
+    if err:
+        return err
+    with _iso_lock:
+        entry = _iso_cache.pop(fingerprint, None)
+        _save_iso_cache()
+    if entry:
+        try:
+            iso_path = Path(entry['iso_path'])
+            if iso_path.exists():
+                iso_path.unlink()
+            if iso_path.parent.exists():
+                iso_path.parent.rmdir()
+        except Exception:
+            pass
+    return jsonify({'ok': True})
+
 
 @ocp_bp.route('/api/openshift/jobs/<job_id>/kubeconfig')
 def download_kubeconfig(job_id):
