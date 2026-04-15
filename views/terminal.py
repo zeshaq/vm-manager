@@ -1,10 +1,17 @@
-"""Legacy VNC terminal — proxies by VM name (used by /terminal?vm_name=...)."""
+"""VM console — serial console via virsh + xterm.js, VNC proxy for graphical."""
 
+import fcntl
 import libvirt
-import xml.etree.ElementTree as ET
+import os
+import pty
+import select
 import socket
+import struct
+import termios
+import xml.etree.ElementTree as ET
+import json
 import gevent
-from flask import Blueprint, render_template, request, session
+from flask import Blueprint, render_template, request, session, current_app
 
 try:
     from geventwebsocket.exceptions import WebSocketError
@@ -12,6 +19,14 @@ except ImportError:
     WebSocketError = Exception
 
 terminal_bp = Blueprint('terminal', __name__)
+
+
+def _set_pty_size(fd, cols, rows):
+    try:
+        fcntl.ioctl(fd, termios.TIOCSWINSZ,
+                    struct.pack('HHHH', rows, cols, 0, 0))
+    except OSError:
+        pass
 
 
 def get_vnc_port(vm_name):
@@ -38,7 +53,81 @@ def terminal():
     vm_name = request.args.get('vm_name')
     if not vm_name:
         return "Missing vm_name parameter", 400
-    return render_template('novnc.html', vm_name=vm_name)
+    return render_template('vm_terminal.html', vm_name=vm_name)
+
+
+@terminal_bp.route('/vm-console-ws')
+def vm_console_ws():
+    ws = request.environ.get('wsgi.websocket')
+    if not ws:
+        return 'WebSocket required', 400
+
+    if 'username' not in session:
+        ws.close()
+        return ''
+
+    vm_name = request.args.get('vm_name', '').strip()
+    if not vm_name:
+        ws.close()
+        return ''
+
+    current_app.logger.info(f"VM console opened for {vm_name} by {session['username']}")
+
+    pid, fd = pty.fork()
+    if pid == 0:
+        os.execvp('virsh', ['virsh', 'console', vm_name])
+        os._exit(1)
+
+    _set_pty_size(fd, 220, 50)
+
+    def pty_to_ws():
+        try:
+            while True:
+                r, _, _ = select.select([fd], [], [], 1)
+                if r:
+                    try:
+                        data = os.read(fd, 4096)
+                    except OSError:
+                        break
+                    if not data:
+                        break
+                    ws.send(data.decode(errors='replace'))
+        except (WebSocketError, OSError):
+            pass
+        finally:
+            try: ws.close()
+            except Exception: pass
+
+    def ws_to_pty():
+        try:
+            while True:
+                data = ws.receive()
+                if data is None:
+                    break
+                if isinstance(data, str):
+                    try:
+                        msg = json.loads(data)
+                        if isinstance(msg, dict) and msg.get('type') == 'resize':
+                            _set_pty_size(fd, int(msg.get('cols', 80)), int(msg.get('rows', 24)))
+                            continue
+                    except (ValueError, KeyError, TypeError):
+                        pass
+                    os.write(fd, data.encode())
+                else:
+                    os.write(fd, data)
+        except (WebSocketError, OSError):
+            pass
+
+    g1 = gevent.spawn(pty_to_ws)
+    g2 = gevent.spawn(ws_to_pty)
+    gevent.joinall([g1, g2])
+
+    try: os.close(fd)
+    except OSError: pass
+    try: os.waitpid(pid, 0)
+    except OSError: pass
+
+    return ''
 
 
 @terminal_bp.route('/vnc')
