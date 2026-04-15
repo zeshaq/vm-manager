@@ -724,13 +724,15 @@ def _run_deploy(job_id: str, cfg: dict):
         # ── Step 3: Create infra-env ──────────────────────────────────────────
         phase('Creating infrastructure environment', 18)
         infra_payload = {
-            'name':               f'{cluster_name}-infra',
-            'cluster_id':         cluster_id,
-            'openshift_version':  cfg['ocp_version'],
-            'pull_secret':        cfg['pull_secret'],
-            'ssh_authorized_key': cfg.get('ssh_public_key', ''),
-            'image_type':         'minimal-iso',
+            'name':              f'{cluster_name}-infra',
+            'cluster_id':        cluster_id,
+            'openshift_version': cfg['ocp_version'],
+            'pull_secret':       cfg['pull_secret'],
+            'image_type':        'minimal-iso',
+            'cpu_architecture':  'x86_64',
         }
+        if cfg.get('ssh_public_key', '').strip():
+            infra_payload['ssh_authorized_key'] = cfg['ssh_public_key'].strip()
 
         # Static network configuration — only if the user requested it
         if cfg.get('static_ip_enabled') and cfg.get('node_ips'):
