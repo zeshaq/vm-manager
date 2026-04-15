@@ -19,7 +19,9 @@ from .creation import generate_vm_xml
 api_bp = Blueprint('api', __name__, url_prefix='/api')
 limiter = Limiter(key_func=get_remote_address)
 
-STORAGE_PATH = '/var/lib/libvirt/images'
+STORAGE_PATH       = '/var/lib/libvirt/images'
+CLOUD_IMAGES_PATH  = '/var/lib/libvirt/images/cloud-images'
+CLOUD_LOCALDS_BIN  = '/usr/bin/cloud-localds'
 ALLOWED_EXTENSIONS = {'iso', 'img', 'qcow2'}
 ALLOWED_DISK_FORMATS = {'qcow2', 'raw'}
 VM_NAME_RE = re.compile(r'^[a-zA-Z0-9][a-zA-Z0-9._-]{0,62}$')
@@ -764,7 +766,7 @@ ssh_pwauth: true
             with open(os.path.join(tmp, 'user-data'), 'w') as f: f.write(user_data)
             with open(os.path.join(tmp, 'meta-data'), 'w') as f: f.write(meta_data)
             subprocess.run(
-                ['cloud-localds', seed_iso, os.path.join(tmp, 'user-data'), os.path.join(tmp, 'meta-data')],
+                [CLOUD_LOCALDS_BIN, seed_iso, os.path.join(tmp, 'user-data'), os.path.join(tmp, 'meta-data')],
                 check=True, capture_output=True, text=True
             )
             created.append(seed_iso)
@@ -1315,6 +1317,33 @@ def delete_file():
         os.remove(full_path)
 
     return jsonify({'success': True})
+
+
+@api_bp.route('/cloud-images', methods=['GET'])
+def list_cloud_images():
+    """Return image files from the cloud-images directory only."""
+    err = require_auth()
+    if err:
+        return err
+
+    files = []
+    os.makedirs(CLOUD_IMAGES_PATH, exist_ok=True)
+    try:
+        for filename in sorted(os.listdir(CLOUD_IMAGES_PATH)):
+            full_path = os.path.join(CLOUD_IMAGES_PATH, filename)
+            if os.path.isfile(full_path):
+                ext = filename.rsplit('.', 1)[-1].lower() if '.' in filename else 'raw'
+                stats = os.stat(full_path)
+                files.append({
+                    'name': filename,
+                    'path': full_path,
+                    'size': get_human_readable_size(stats.st_size),
+                    'type': ext,
+                })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+    return jsonify({'files': files})
 
 
 @api_bp.route('/storage/images', methods=['GET'])

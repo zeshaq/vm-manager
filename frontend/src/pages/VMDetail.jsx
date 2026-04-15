@@ -114,6 +114,7 @@ export default function VMDetail() {
 
   // supporting data
   const [images, setImages] = useState([])
+  const [cloudImages, setCloudImages] = useState([])
   const [networks, setNetworks] = useState([])
   const [bridges, setBridges] = useState([])
 
@@ -157,6 +158,7 @@ export default function VMDetail() {
   useEffect(() => {
     fetchVM()
     api.get('/storage/images').then(r => setImages(r.data.files || [])).catch(() => {})
+    api.get('/cloud-images').then(r => setCloudImages(r.data.files || [])).catch(() => {})
     api.get('/networks').then(r => {
       setNetworks(r.data.networks || [])
       setBridges(r.data.bridges || [])
@@ -344,23 +346,35 @@ export default function VMDetail() {
         {diskTab === 'cloud' && (
           <div className="bg-navy-800 border border-navy-500 rounded-lg p-4 space-y-3">
             <p className="text-slate-400 text-sm">
-              Select a Ubuntu/cloud image. An overlay disk + cloud-init seed ISO will be created and attached.
+              An overlay disk + cloud-init seed ISO will be created and attached.
               On first boot the VM will have user <code className="text-sky-400 bg-navy-700 px-1 rounded">ze</code> / password <code className="text-sky-400 bg-navy-700 px-1 rounded">ze</code>.
             </p>
-            <div className="flex gap-2">
-              <DiskPathInput value={cloudImage} onChange={setCloudImage} images={images} />
-              <button
-                onClick={() => {
-                  if (!cloudImage) return
-                  act('cloud-image', () => api.post(`/vms/${uuid}/cloud-image`, { base_image: cloudImage }))
-                  setCloudImage('')
-                  setDiskTab('attach')
-                }}
-                disabled={saving['cloud-image'] || !cloudImage}
-                className="flex items-center gap-1.5 bg-sky-500 hover:bg-sky-400 text-white px-3 py-2 rounded-md text-sm disabled:opacity-50 whitespace-nowrap">
-                <HardDrive size={14} /> {saving['cloud-image'] ? 'Setting up…' : 'Attach & Configure'}
-              </button>
-            </div>
+            {cloudImages.length === 0 ? (
+              <p className="text-yellow-400 text-sm">No images found in <code className="bg-navy-700 px-1 rounded">/var/lib/libvirt/images/cloud-images/</code>. Place cloud images there first.</p>
+            ) : (
+              <div className="flex gap-2">
+                <select
+                  value={cloudImage}
+                  onChange={e => setCloudImage(e.target.value)}
+                  className={inputCls('flex-1')}>
+                  <option value="">Select a cloud image…</option>
+                  {cloudImages.map(f => (
+                    <option key={f.path} value={f.path}>{f.name} — {f.size}</option>
+                  ))}
+                </select>
+                <button
+                  onClick={() => {
+                    if (!cloudImage) return
+                    act('cloud-image', () => api.post(`/vms/${uuid}/cloud-image`, { base_image: cloudImage }))
+                    setCloudImage('')
+                    setDiskTab('attach')
+                  }}
+                  disabled={saving['cloud-image'] || !cloudImage}
+                  className="flex items-center gap-1.5 bg-sky-500 hover:bg-sky-400 text-white px-3 py-2 rounded-md text-sm disabled:opacity-50 whitespace-nowrap">
+                  <HardDrive size={14} /> {saving['cloud-image'] ? 'Setting up…' : 'Attach & Configure'}
+                </button>
+              </div>
+            )}
           </div>
         )}
       </Section>
