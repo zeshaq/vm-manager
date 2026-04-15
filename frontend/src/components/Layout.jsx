@@ -155,8 +155,12 @@ export default function Layout({ children, username, onLogout }) {
             <span className="text-sky-400 font-bold text-lg tracking-tight">Hypercloud</span>
           </div>
           {hostname && (
-            <div className="text-slate-100 font-bold text-base tracking-tight truncate" title={hostname}>
-              {hostname}
+            <div
+              className="mt-2 px-3 py-2 rounded-md bg-sky-700 text-white font-bold truncate"
+              style={{ fontSize: '3rem', lineHeight: '1.1' }}
+              title={hostname}
+            >
+              {hostname.toUpperCase()}
             </div>
           )}
         </div>
