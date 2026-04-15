@@ -1,13 +1,10 @@
 Flask
 simplepam
 libvirt-python
-flask-socketio
-websockify
 numpy
-flask-sock
 gunicorn
 gevent
-hypercorn
+gevent-websocket
 psutil
 flask-limiter
 docker

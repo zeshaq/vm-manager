@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # ============================================================
 # VM Manager — installer for Ubuntu 22.04 / 24.04
-# Usage:  sudo bash install.sh [--user <username>] [--port <port>] [--repo <url>]
+# Usage:  sudo bash install.sh [--user <username>] [--port <port>] [--repo <url>] [--branch <branch>]
 # ============================================================
 set -euo pipefail
 
@@ -9,14 +9,16 @@ set -euo pipefail
 INSTALL_USER="${SUDO_USER:-$(logname 2>/dev/null || echo ubuntu)}"
 APP_PORT="5000"
 REPO_URL="https://github.com/zeshaq/vm-manager.git"
+REPO_BRANCH="main"
 APP_DIR=""           # derived from INSTALL_USER below
 
 # ── argument parsing ──────────────────────────────────────────────────────────
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --user)  INSTALL_USER="$2"; shift 2 ;;
-    --port)  APP_PORT="$2";     shift 2 ;;
-    --repo)  REPO_URL="$2";     shift 2 ;;
+    --user)    INSTALL_USER="$2"; shift 2 ;;
+    --port)    APP_PORT="$2";     shift 2 ;;
+    --repo)    REPO_URL="$2";     shift 2 ;;
+    --branch)  REPO_BRANCH="$2";  shift 2 ;;
     *)       echo "Unknown option: $1"; exit 1 ;;
   esac
 done
@@ -61,6 +63,7 @@ success "Install target user: ${INSTALL_USER}"
 info    "App directory : ${APP_DIR}"
 info    "Listening port: ${APP_PORT}"
 info    "Repo          : ${REPO_URL}"
+info    "Branch        : ${REPO_BRANCH}"
 
 # ── system packages ───────────────────────────────────────────────────────────
 step "2/9  Installing system packages"
@@ -138,10 +141,12 @@ fi
 step "7/9  Cloning repository"
 
 if [[ -d "$APP_DIR/.git" ]]; then
-  info "Repo already exists — pulling latest"
-  sudo -u "$INSTALL_USER" git -C "$APP_DIR" pull
+  info "Repo already exists — fetching and updating branch ${REPO_BRANCH}"
+  sudo -u "$INSTALL_USER" git -C "$APP_DIR" fetch origin
+  sudo -u "$INSTALL_USER" git -C "$APP_DIR" checkout "$REPO_BRANCH"
+  sudo -u "$INSTALL_USER" git -C "$APP_DIR" pull origin "$REPO_BRANCH"
 else
-  sudo -u "$INSTALL_USER" git clone "$REPO_URL" "$APP_DIR"
+  sudo -u "$INSTALL_USER" git clone --branch "$REPO_BRANCH" "$REPO_URL" "$APP_DIR"
 fi
 success "Repository ready at ${APP_DIR}"
 
@@ -162,7 +167,7 @@ success "Generated SECRET_KEY"
 
 cat > /etc/systemd/system/vm-manager.service <<SERVICE
 [Unit]
-Description=VM Manager
+Description=Hypercloud VM Manager
 Documentation=https://github.com/zeshaq/vm-manager
 After=network.target libvirtd.service
 Wants=libvirtd.service
@@ -178,9 +183,8 @@ Environment="FLASK_DEBUG=false"
 Environment="SECRET_KEY=${SECRET_KEY}"
 
 ExecStart=${VENV_DIR}/bin/gunicorn \\
-    --worker-class gevent \\
+    --worker-class geventwebsocket.gunicorn.workers.GeventWebSocketWorker \\
     --workers 1 \\
-    --worker-connections 1000 \\
     --bind 0.0.0.0:${APP_PORT} \\
     --timeout 120 \\
     --keep-alive 5 \\
