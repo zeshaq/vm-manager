@@ -187,7 +187,7 @@ function WarningsPanel({ warnings, errors }) {
   )
 }
 
-// ── Sync-from-AI modal ────────────────────────────────────────────────────────
+// ── Sync-from-AI modal (only shown when no stored credentials) ────────────────
 function SyncModal({ jobId, onClose, onSynced }) {
   const [offlineToken, setOfflineToken] = useState('')
   const [pullSecret,   setPullSecret]   = useState('')
@@ -195,25 +195,26 @@ function SyncModal({ jobId, onClose, onSynced }) {
   const [error, setError] = useState('')
   const [result, setResult] = useState(null)
 
-  const submit = async () => {
+  const submit = async (body = {}) => {
+    setBusy(true)
+    setError('')
+    try {
+      const r = await api.post(`/openshift/jobs/${jobId}/sync`, body)
+      setResult(r.data)
+      onSynced()
+    } catch (e) {
+      setError(e.response?.data?.message || e.response?.data?.error || 'Sync failed')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const submitForm = () => {
     if (!offlineToken.trim() || !pullSecret.trim()) {
       setError('Both fields are required')
       return
     }
-    setBusy(true)
-    setError('')
-    try {
-      const r = await api.post(`/openshift/jobs/${jobId}/sync`, {
-        offline_token: offlineToken.trim(),
-        pull_secret:   pullSecret.trim(),
-      })
-      setResult(r.data)
-      onSynced()
-    } catch (e) {
-      setError(e.response?.data?.error || 'Sync failed')
-    } finally {
-      setBusy(false)
-    }
+    submit({ offline_token: offlineToken.trim(), pull_secret: pullSecret.trim() })
   }
 
   const ACTION_LABEL = {
@@ -286,7 +287,7 @@ function SyncModal({ jobId, onClose, onSynced }) {
                 className="flex-1 bg-navy-700 hover:bg-navy-600 text-slate-300 text-sm font-medium py-2 rounded-md transition-colors">
                 Cancel
               </button>
-              <button onClick={submit} disabled={busy}
+              <button onClick={submitForm} disabled={busy}
                 className="flex-1 flex items-center justify-center gap-2 bg-sky-600 hover:bg-sky-500 disabled:opacity-50 text-white text-sm font-semibold py-2 rounded-md transition-colors">
                 {busy ? <Loader2 size={13} className="animate-spin" /> : <Upload size={13} />}
                 {busy ? 'Syncing…' : 'Sync Now'}
@@ -308,6 +309,7 @@ export default function OpenShiftJob() {
   const [loading, setLoad]  = useState(true)
   const [configOpen, setConfigOpen] = useState(false)
   const [syncOpen,   setSyncOpen]   = useState(false)
+  const [syncing,    setSyncing]    = useState(false)
   const logRef              = useRef(null)
   const timerRef            = useRef(null)
 
@@ -352,10 +354,29 @@ export default function OpenShiftJob() {
     return parseLogs(job.logs || [], job.config)
   }, [job?.logs?.length, job?.config])  // eslint-disable-line
 
-  // Resume polling when sync completes
+  // Direct sync — uses stored credentials, no modal needed
+  const syncDirect = async () => {
+    setSyncing(true)
+    try {
+      await api.post(`/openshift/jobs/${jobId}/sync`, {})
+      // Restart polling
+      clearInterval(timerRef.current)
+      timerRef.current = setInterval(() => poll(true), 5000)
+      poll(true)
+    } catch (e) {
+      if (e.response?.data?.error === 'no_stored_credentials') {
+        // No stored creds — fall back to modal
+        setSyncOpen(true)
+      }
+      // other errors: job will show in logs
+    } finally {
+      setSyncing(false)
+    }
+  }
+
+  // Resume polling when sync modal completes
   const handleSynced = () => {
     setSyncOpen(false)
-    // Restart polling in case it stopped
     clearInterval(timerRef.current)
     timerRef.current = setInterval(() => poll(true), 5000)
     poll(true)
@@ -433,11 +454,20 @@ export default function OpenShiftJob() {
           </div>
         </div>
         <div className="flex items-center gap-2">
-          {/* Sync button: shown for pending jobs that have a cluster_id */}
+          {/* Sync button: shown for running jobs that have a cluster_id */}
           {isRunning && job.cluster_id && (
-            <button onClick={() => setSyncOpen(true)}
-              className="flex items-center gap-1.5 bg-amber-600/80 hover:bg-amber-500 text-white text-xs font-semibold px-3 py-1.5 rounded-md transition-colors">
-              <Upload size={12} /> Sync from AI
+            <button
+              onClick={syncDirect}
+              disabled={syncing}
+              title={job.has_credentials ? 'Sync using saved credentials' : 'Credentials required'}
+              className="flex items-center gap-1.5 bg-amber-600/80 hover:bg-amber-500 disabled:opacity-60 text-white text-xs font-semibold px-3 py-1.5 rounded-md transition-colors">
+              {syncing
+                ? <Loader2 size={12} className="animate-spin" />
+                : <Upload size={12} />}
+              {syncing ? 'Syncing…' : 'Sync from AI'}
+              {!job.has_credentials && !syncing && (
+                <span className="ml-0.5 text-amber-200 opacity-70">*</span>
+              )}
             </button>
           )}
           {isFailed && (

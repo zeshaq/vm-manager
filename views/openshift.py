@@ -568,7 +568,9 @@ def job_detail(job_id):
     job = _jobs.get(job_id)
     if not job:
         return jsonify({'error': 'Job not found'}), 404
-    return jsonify(job)
+    # Tell the frontend whether credentials are stored so it can skip the input form
+    stored = _get_job_secrets(job_id)
+    return jsonify({**job, 'has_credentials': bool(stored.get('offline_token'))})
 
 
 @ocp_bp.route('/api/openshift/jobs/<job_id>', methods=['DELETE'])
@@ -1595,12 +1597,15 @@ def _monitor_install_thread(job_id: str, cfg: dict, cluster_id: str):
 def sync_job(job_id):
     """Sync a stuck/pending job with the real state in the Assisted Installer.
 
-    Accepts offline_token + pull_secret.  Queries the AI, then:
+    Credentials priority:
+      1. Stored secrets file (written at deploy time — most common case)
+      2. offline_token + pull_secret in request body (fallback for legacy jobs)
+
+    Once resolved, queries the AI cluster state and:
       • installed              → collect credentials, mark complete
       • installing / finalizing → spawn monitoring thread
-      • ready / known          → assign roles (multi-node) + trigger install + monitor
+      • ready / known          → full resume via _run_deploy
       • error / cancelled      → mark failed
-      • anything else          → full resume via _run_deploy
     """
     err = _auth()
     if err:
@@ -1610,13 +1615,6 @@ def sync_job(job_id):
     if not job:
         return jsonify({'error': 'Job not found'}), 404
 
-    data          = request.get_json(silent=True) or {}
-    offline_token = data.get('offline_token', '').strip()
-    pull_secret   = data.get('pull_secret', '').strip()
-
-    if not offline_token or not pull_secret:
-        return jsonify({'error': 'offline_token and pull_secret are required'}), 400
-
     if job_id in _running_jobs:
         return jsonify({'error': 'Job already has an active thread'}), 409
 
@@ -1624,9 +1622,19 @@ def sync_job(job_id):
     if not cluster_id:
         return jsonify({'error': 'No cluster_id recorded — job must be restarted from scratch'}), 400
 
+    # ── Resolve credentials: stored secrets take priority ─────────────────────
+    stored        = _get_job_secrets(job_id)
+    data          = request.get_json(silent=True) or {}
+    offline_token = stored.get('offline_token') or data.get('offline_token', '').strip()
+    pull_secret   = stored.get('pull_secret')   or data.get('pull_secret', '').strip()
+
+    if not offline_token or not pull_secret:
+        return jsonify({'error': 'no_stored_credentials',
+                        'message': 'No stored credentials for this job — please provide offline_token and pull_secret'}), 400
+
     cfg = {**job.get('config', {}), 'offline_token': offline_token, 'pull_secret': pull_secret}
 
-    # Store credentials now so auto-resume works on future restarts
+    # Persist credentials (in case they came from request body this time)
     _store_job_secrets(job_id, offline_token, pull_secret)
 
     try:
