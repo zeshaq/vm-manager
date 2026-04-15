@@ -1,8 +1,8 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import api from '../api'
 import {
-  Download, Trash2, RefreshCw, HardDrive,
-  CheckCircle, ChevronDown, ChevronRight, Cloud, Plus,
+  Download, Trash2, RefreshCw,
+  CheckCircle, ChevronDown, ChevronRight, Cloud, Plus, Settings, Play, X,
 } from 'lucide-react'
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -80,6 +80,17 @@ function ProgressBar({ jobId, onDone }) {
   )
 }
 
+function prepareScript(image) {
+  return `sudo virt-customize -a ${image.path} \\
+  --run-command 'useradd -m -s /bin/bash ze || true' \\
+  --password ze:password:ze \\
+  --run-command 'usermod -aG sudo,adm,wheel ze 2>/dev/null || true' \\
+  --run-command 'echo "ze ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/ze && chmod 440 /etc/sudoers.d/ze' \\
+  --run-command 'systemctl disable cloud-init cloud-init-local cloud-config cloud-final 2>/dev/null || true' \\
+  --run-command 'touch /etc/cloud/cloud-init.disabled' \\
+  --selinux-relabel`
+}
+
 // ── Image card ────────────────────────────────────────────────────────────────
 
 function ImageCard({ image, onDeleted }) {
@@ -87,6 +98,68 @@ function ImageCard({ image, onDeleted }) {
   const [deleteFile, setDeleteFile] = useState(true)
   const [deleting,   setDeleting]   = useState(false)
   const [jobDone,    setJobDone]    = useState(false)
+
+  const [showPrepare, setShowPrepare] = useState(false)
+  const [script,      setScript]      = useState('')
+  const [running,     setRunning]     = useState(false)
+  const [output,      setOutput]      = useState([])
+  const [runStatus,   setRunStatus]   = useState(null) // null | 'done' | 'error'
+  const outputRef = useRef(null)
+
+  const openPrepare = () => {
+    setScript(prepareScript(image))
+    setOutput([])
+    setRunStatus(null)
+    setShowPrepare(true)
+  }
+
+  const runScript = () => {
+    setRunning(true)
+    setOutput([])
+    setRunStatus(null)
+
+    const es = new EventSource(`/api/images/${image.id}/run-script-stream`)
+    // use fetch + SSE manually since we need to POST
+    es.close()
+
+    fetch(`/api/images/${image.id}/run-script`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ script }),
+      credentials: 'same-origin',
+    }).then(async res => {
+      const reader = res.body.getReader()
+      const decoder = new TextDecoder()
+      let buf = ''
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+        buf += decoder.decode(value, { stream: true })
+        const parts = buf.split('\n\n')
+        buf = parts.pop()
+        for (const part of parts) {
+          const line = part.replace(/^data: /, '').trim()
+          if (!line) continue
+          try {
+            const msg = JSON.parse(line)
+            if (msg.line !== undefined) {
+              setOutput(o => [...o, msg.line])
+              setTimeout(() => outputRef.current?.scrollTo(0, outputRef.current.scrollHeight), 50)
+            }
+            if (msg.status) {
+              setRunStatus(msg.status)
+              setRunning(false)
+            }
+          } catch {}
+        }
+      }
+      setRunning(false)
+    }).catch(e => {
+      setOutput(o => [...o, `Error: ${e.message}`])
+      setRunStatus('error')
+      setRunning(false)
+    })
+  }
 
   const handleDelete = async () => {
     if (!confirming) { setConfirming(true); return }
@@ -104,46 +177,57 @@ function ImageCard({ image, onDeleted }) {
   const isDownloading = image.status === 'downloading' && !jobDone
 
   return (
-    <div className="flex items-start gap-4 bg-navy-750 border border-navy-500 rounded-lg p-4 hover:border-navy-400 transition-colors">
-      <div className="w-10 h-10 rounded-lg bg-navy-700 flex items-center justify-center flex-shrink-0">
-        <Cloud size={20} className="text-sky-400"/>
-      </div>
-
-      <div className="flex-1 min-w-0">
-        <div className="flex items-center gap-2 flex-wrap">
-          {isDownloading
-            ? <span className="w-2 h-2 rounded-full bg-sky-400 animate-pulse inline-block"/>
-            : image.status === 'failed'
-              ? <span className="w-2 h-2 rounded-full bg-red-400 inline-block"/>
-              : <span className="w-2 h-2 rounded-full bg-emerald-400 inline-block"/>
-          }
-          <span className="text-slate-100 font-medium text-sm">{image.name}</span>
-          <OsBadge os={image.os}/>
-          {image.version && <span className="text-xs text-slate-500">v{image.version}</span>}
+    <div className="bg-navy-750 border border-navy-500 rounded-lg hover:border-navy-400 transition-colors">
+      <div className="flex items-start gap-4 p-4">
+        <div className="w-10 h-10 rounded-lg bg-navy-700 flex items-center justify-center flex-shrink-0">
+          <Cloud size={20} className="text-sky-400"/>
         </div>
-        <p className="text-slate-500 text-xs mt-0.5 font-mono truncate">{image.path}</p>
-        <div className="flex gap-4 mt-1 text-xs text-slate-500">
-          {image.format && image.format !== 'unknown' && <span>{image.format}</span>}
-          {image.size > 0 && <span>{fmt(image.size)} on disk</span>}
-          {image.virtual_size > 0 && <span>{fmt(image.virtual_size)} virtual</span>}
-        </div>
-        {isDownloading && (
-          <ProgressBar jobId={image.job_id} onDone={() => { setJobDone(true); onDeleted() }}/>
-        )}
-        {image.status === 'failed' && image.error && (
-          <p className="text-red-400 text-xs mt-1">{image.error}</p>
-        )}
-      </div>
 
-      {image.status !== 'downloading' && (
-        <div className="flex flex-col items-end gap-1 flex-shrink-0">
-          {confirming && (
-            <label className="flex items-center gap-1.5 text-xs text-slate-400 cursor-pointer mb-1">
-              <input type="checkbox" checked={deleteFile} onChange={e => setDeleteFile(e.target.checked)} className="accent-red-500"/>
-              Delete file
-            </label>
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2 flex-wrap">
+            {isDownloading
+              ? <span className="w-2 h-2 rounded-full bg-sky-400 animate-pulse inline-block"/>
+              : image.status === 'failed'
+                ? <span className="w-2 h-2 rounded-full bg-red-400 inline-block"/>
+                : <span className="w-2 h-2 rounded-full bg-emerald-400 inline-block"/>
+            }
+            <span className="text-slate-100 font-medium text-sm">{image.name}</span>
+            <OsBadge os={image.os}/>
+            {image.version && <span className="text-xs text-slate-500">v{image.version}</span>}
+          </div>
+          <p className="text-slate-500 text-xs mt-0.5 font-mono truncate">{image.path}</p>
+          <div className="flex gap-4 mt-1 text-xs text-slate-500">
+            {image.format && image.format !== 'unknown' && <span>{image.format}</span>}
+            {image.size > 0 && <span>{fmt(image.size)} on disk</span>}
+            {image.virtual_size > 0 && <span>{fmt(image.virtual_size)} virtual</span>}
+          </div>
+          {isDownloading && (
+            <ProgressBar jobId={image.job_id} onDone={() => { setJobDone(true); onDeleted() }}/>
           )}
-          <div className="flex gap-1">
+          {image.status === 'failed' && image.error && (
+            <p className="text-red-400 text-xs mt-1">{image.error}</p>
+          )}
+        </div>
+
+        {image.status !== 'downloading' && (
+          <div className="flex items-center gap-1 flex-shrink-0">
+            <button
+              onClick={showPrepare ? () => setShowPrepare(false) : openPrepare}
+              className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded text-xs font-medium transition-colors ${
+                showPrepare
+                  ? 'bg-navy-600 text-slate-300'
+                  : 'bg-navy-700 hover:bg-navy-600 text-slate-400 hover:text-slate-200'
+              }`}
+              title="Prepare image with virt-customize"
+            >
+              <Settings size={13}/> Prepare
+            </button>
+            {confirming && (
+              <label className="flex items-center gap-1 text-xs text-slate-400 cursor-pointer">
+                <input type="checkbox" checked={deleteFile} onChange={e => setDeleteFile(e.target.checked)} className="accent-red-500"/>
+                file
+              </label>
+            )}
             {confirming && (
               <button onClick={() => setConfirming(false)}
                 className="text-xs px-2 py-1 rounded text-slate-400 hover:text-slate-200 hover:bg-navy-700 transition-colors">
@@ -158,6 +242,48 @@ function ImageCard({ image, onDeleted }) {
               }`}
               title={confirming ? 'Confirm delete' : 'Delete'}>
               <Trash2 size={14}/>
+            </button>
+          </div>
+        )}
+      </div>
+
+      {/* Prepare panel */}
+      {showPrepare && (
+        <div className="border-t border-navy-600 p-4 space-y-3">
+          <div className="flex items-center justify-between">
+            <p className="text-xs text-slate-400">Edit and run the <code className="text-sky-400">virt-customize</code> script to bake credentials into this image. Make sure <code className="text-sky-400">libguestfs-tools</code> is installed.</p>
+          </div>
+          <textarea
+            value={script}
+            onChange={e => setScript(e.target.value)}
+            rows={9}
+            spellCheck={false}
+            className="w-full bg-navy-900 border border-navy-500 rounded-md px-3 py-2.5 text-xs font-mono text-slate-200 focus:outline-none focus:border-sky-500 resize-y"
+          />
+          {output.length > 0 && (
+            <div
+              ref={outputRef}
+              className="bg-black rounded-md p-3 text-xs font-mono text-slate-300 max-h-48 overflow-y-auto"
+            >
+              {output.map((line, i) => (
+                <div key={i} className={line.toLowerCase().includes('error') ? 'text-red-400' : ''}>{line || '\u00a0'}</div>
+              ))}
+              {runStatus === 'done' && <div className="text-emerald-400 mt-1">✓ Done</div>}
+              {runStatus === 'error' && <div className="text-red-400 mt-1">✗ Failed</div>}
+            </div>
+          )}
+          <div className="flex gap-2">
+            <button
+              onClick={runScript}
+              disabled={running || !script.trim()}
+              className="flex items-center gap-1.5 px-3 py-1.5 bg-sky-600 hover:bg-sky-500 disabled:opacity-50 text-white text-xs rounded font-medium transition-colors"
+            >
+              {running ? <RefreshCw size={12} className="animate-spin"/> : <Play size={12}/>}
+              {running ? 'Running…' : 'Run'}
+            </button>
+            <button onClick={() => setShowPrepare(false)}
+              className="flex items-center gap-1.5 px-3 py-1.5 bg-navy-700 hover:bg-navy-600 text-slate-400 text-xs rounded transition-colors">
+              <X size={12}/> Close
             </button>
           </div>
         </div>

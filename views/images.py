@@ -14,7 +14,7 @@ Features
 • Images are selectable in VM creation and Kubernetes deployment
 """
 
-import os, json, re, time, uuid as _uuid, threading, traceback
+import os, json, re, time, uuid as _uuid, threading, traceback, subprocess
 import urllib.request
 from pathlib import Path
 from flask import Blueprint, jsonify, request, session, Response, stream_with_context, send_file
@@ -490,6 +490,45 @@ def download_progress(job_id):
             if snap['status'] in ('done', 'error'):
                 return
             time.sleep(0.6)
+
+    return Response(
+        stream_with_context(generate()),
+        content_type='text/event-stream',
+        headers={'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no'},
+    )
+
+
+@images_bp.route('/api/images/<image_id>/run-script', methods=['POST'])
+def run_script(image_id):
+    """Run an arbitrary shell script against an image, stream output via SSE."""
+    err = _auth()
+    if err: return err
+
+    data   = request.get_json() or {}
+    script = data.get('script', '').strip()
+    if not script:
+        return jsonify({'error': 'script required'}), 400
+
+    img = _get_image(image_id)
+    if not img:
+        return jsonify({'error': 'Image not found'}), 404
+
+    def generate():
+        try:
+            proc = subprocess.Popen(
+                ['bash', '-c', script],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                bufsize=1,
+            )
+            for line in proc.stdout:
+                yield f'data: {json.dumps({"line": line.rstrip()})}\n\n'
+            proc.wait()
+            status = 'done' if proc.returncode == 0 else 'error'
+            yield f'data: {json.dumps({"status": status, "returncode": proc.returncode})}\n\n'
+        except Exception as exc:
+            yield f'data: {json.dumps({"status": "error", "line": str(exc)})}\n\n'
 
     return Response(
         stream_with_context(generate()),
