@@ -516,7 +516,6 @@ def run_script(image_id):
     def generate():
         try:
             env = os.environ.copy()
-            env['LIBGUESTFS_BACKEND'] = 'direct'   # allow virt-customize without KVM nesting
             env['SUDO_ASKPASS'] = '/bin/false'      # prevent sudo from hanging on askpass
             proc = subprocess.Popen(
                 ['sudo', '-n', 'bash', '-c', script],
