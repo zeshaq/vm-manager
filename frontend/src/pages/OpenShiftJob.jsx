@@ -507,6 +507,7 @@ export default function OpenShiftJob() {
   const [configOpen, setConfigOpen] = useState(false)
   const [syncOpen,   setSyncOpen]   = useState(false)
   const [syncing,    setSyncing]    = useState(false)
+  const [retrying,   setRetrying]   = useState(false)
   const logRef              = useRef(null)
   const timerRef            = useRef(null)
 
@@ -532,12 +533,15 @@ export default function OpenShiftJob() {
     if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight
   }, [job?.logs?.length])
 
-  // Stop polling when done
+  // Stop polling when done; restart if job comes back to pending (e.g. after retry)
   useEffect(() => {
     if (job?.status === 'complete' || job?.status === 'failed') {
       clearInterval(timerRef.current)
+    } else if (job?.status === 'pending') {
+      clearInterval(timerRef.current)
+      timerRef.current = setInterval(() => poll(true), 5000)
     }
-  }, [job?.status])
+  }, [job?.status])  // eslint-disable-line
 
   const copy = (text, key) => {
     navigator.clipboard.writeText(text)
@@ -577,6 +581,23 @@ export default function OpenShiftJob() {
     clearInterval(timerRef.current)
     timerRef.current = setInterval(() => poll(true), 5000)
     poll(true)
+  }
+
+  // Retry a failed deployment (cancel+reset cluster, reinsert ISO, reboot VMs)
+  const retryDeploy = async () => {
+    setRetrying(true)
+    try {
+      await api.post(`/openshift/jobs/${jobId}/retry`, {})
+      clearInterval(timerRef.current)
+      timerRef.current = setInterval(() => poll(true), 5000)
+      poll(true)
+    } catch (e) {
+      if (e.response?.data?.error === 'no_stored_credentials') {
+        setSyncOpen(true)
+      }
+    } finally {
+      setRetrying(false)
+    }
   }
 
   if (loading) {
@@ -649,8 +670,8 @@ export default function OpenShiftJob() {
           </div>
         </div>
         <div className="flex items-center gap-2">
-          {/* Sync button: shown for running jobs that have a cluster_id */}
-          {isRunning && job.cluster_id && (
+          {/* Sync button: shown for running or failed jobs that have a cluster_id */}
+          {(isRunning || isFailed) && job.cluster_id && (
             <button
               onClick={syncDirect}
               disabled={syncing}
@@ -662,6 +683,21 @@ export default function OpenShiftJob() {
               {syncing ? 'Syncing…' : 'Sync from AI'}
               {!job.has_credentials && !syncing && (
                 <span className="ml-0.5 text-amber-200 opacity-70">*</span>
+              )}
+            </button>
+          )}
+          {isFailed && job.cluster_id && (
+            <button
+              onClick={retryDeploy}
+              disabled={retrying}
+              title={job.has_credentials ? 'Reset cluster and retry installation' : 'Credentials required'}
+              className="flex items-center gap-1.5 bg-orange-600/90 hover:bg-orange-500 disabled:opacity-60 text-white text-xs font-semibold px-3 py-1.5 rounded-md transition-colors">
+              {retrying
+                ? <Loader2 size={12} className="animate-spin" />
+                : <RefreshCw size={12} />}
+              {retrying ? 'Retrying…' : 'Retry'}
+              {!job.has_credentials && !retrying && (
+                <span className="ml-0.5 text-orange-200 opacity-70">*</span>
               )}
             </button>
           )}

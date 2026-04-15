@@ -689,6 +689,54 @@ def _reboot_vms(vm_names: list, log_fn):
     conn.close()
 
 
+def _insert_cdroms(vm_names: list, iso_path: str, log_fn):
+    """Re-insert the discovery ISO into all VMs (used when retrying after error).
+
+    Also sets the CDROM as boot-order-1 so the next reboot boots from ISO.
+    """
+    try:
+        conn = libvirt.open('qemu:///system')
+    except Exception as e:
+        log_fn(f'  Cannot open libvirt for CDROM insert: {e}', 'warn')
+        return
+
+    for vm_name in vm_names:
+        try:
+            dom = conn.lookupByName(vm_name)
+            xml_str = dom.XMLDesc(0)
+            root    = ET.fromstring(xml_str)
+            for disk in root.findall('.//disk'):
+                if disk.get('device') != 'cdrom':
+                    continue
+                target_el = disk.find('target')
+                if target_el is None:
+                    continue
+                dev = target_el.get('dev', 'sda')
+                bus = target_el.get('bus', 'sata')
+                insert_xml = (
+                    f"<disk type='file' device='cdrom'>"
+                    f"<driver name='qemu' type='raw'/>"
+                    f"<source file='{iso_path}'/>"
+                    f"<target dev='{dev}' bus='{bus}'/>"
+                    f"<readonly/>"
+                    f"<boot order='1'/>"
+                    f"</disk>"
+                )
+                try:
+                    dom.updateDeviceFlags(
+                        insert_xml,
+                        libvirt.VIR_DOMAIN_AFFECT_LIVE |
+                        libvirt.VIR_DOMAIN_AFFECT_CONFIG,
+                    )
+                    log_fn(f'  Inserted ISO into {vm_name} ({dev}) ✓')
+                except libvirt.libvirtError as e:
+                    log_fn(f'  CDROM insert warning ({vm_name}): {e}', 'warn')
+        except libvirt.libvirtError:
+            pass
+
+    conn.close()
+
+
 # ── MAC address generation ────────────────────────────────────────────────────
 
 def _make_mac(job_id: str, node_idx: int) -> str:
@@ -1729,11 +1777,106 @@ def sync_job(job_id):
         return jsonify({'action': 'marked_failed', 'ai_status': ai_status})
 
     else:
-        # ready / known / etc — do a full resume
+        # ready / known / insufficient / etc — do a full resume
+        _job_set(job_id, status='pending', phase='Resuming deployment')
         _running_jobs.add(job_id)
         threading.Thread(target=_run_deploy, args=(job_id, cfg),
                          daemon=True, name=f'ocp-sync-{job_id}').start()
         return jsonify({'action': 'full_resume', 'ai_status': ai_status})
+
+
+@ocp_bp.route('/api/openshift/jobs/<job_id>/retry', methods=['POST'])
+def retry_job(job_id):
+    """Retry a failed deployment.
+
+    Cancels + resets the cluster in Assisted Installer, re-inserts the discovery
+    ISO into every VM, reboots them back into discovery mode, then resumes the
+    deployment pipeline from the node-registration step.
+    """
+    err = _auth()
+    if err:
+        return err
+
+    job = _jobs.get(job_id)
+    if not job:
+        return jsonify({'error': 'Job not found'}), 404
+
+    if job_id in _running_jobs:
+        return jsonify({'error': 'Job already has an active thread'}), 409
+
+    cluster_id = job.get('cluster_id')
+    if not cluster_id:
+        return jsonify({'error': 'No cluster_id recorded — job must be restarted from scratch'}), 400
+
+    iso_path = job.get('iso_path')
+    if not iso_path or not Path(iso_path).exists():
+        return jsonify({'error': f'Discovery ISO not found at {iso_path} — cannot retry'}), 400
+
+    stored        = _get_job_secrets(job_id)
+    data          = request.get_json(silent=True) or {}
+    offline_token = stored.get('offline_token') or data.get('offline_token', '').strip()
+    pull_secret   = stored.get('pull_secret')   or data.get('pull_secret', '').strip()
+
+    if not offline_token or not pull_secret:
+        return jsonify({'error': 'no_stored_credentials',
+                        'message': 'No stored credentials — please provide offline_token and pull_secret'}), 400
+
+    cfg = {**job.get('config', {}), 'offline_token': offline_token, 'pull_secret': pull_secret}
+    _store_job_secrets(job_id, offline_token, pull_secret)
+
+    def _log(msg, level='info'):
+        _job_log(job_id, msg, level)
+
+    try:
+        token = _get_access_token(offline_token)
+        # Check current AI status so we know whether cancel is needed
+        r = _ai('GET', f'/clusters/{cluster_id}', token)
+        ai_status = r.json().get('status', '')
+    except Exception as e:
+        return jsonify({'error': f'Could not reach Assisted Installer: {e}'}), 502
+
+    _job_log(job_id, '── Retry: resetting cluster ──', 'warn')
+    _job_log(job_id, f'  AI cluster status before reset: {ai_status}')
+
+    try:
+        # Cancel first if the cluster is in a cancellable state
+        _CANCELLABLE = {'installing', 'installing-in-progress', 'installing-pending-user-action',
+                        'finalizing', 'error'}
+        if ai_status in _CANCELLABLE:
+            rc = _ai('POST', f'/clusters/{cluster_id}/actions/cancel', token, body={})
+            _job_log(job_id, f'  Cancel: HTTP {rc.status_code}')
+            time.sleep(1)
+
+        # Reset cluster to insufficient / pending state
+        rr = _ai('POST', f'/clusters/{cluster_id}/actions/reset', token, body={})
+        if rr.status_code not in (200, 201, 202):
+            return jsonify({'error': f'Reset failed: HTTP {rr.status_code} — {rr.text[:200]}'}), 502
+        _job_log(job_id, f'  Cluster reset ✓ (HTTP {rr.status_code})')
+
+    except Exception as e:
+        return jsonify({'error': f'Reset failed: {e}'}), 502
+
+    # Re-insert ISO and reboot VMs
+    vm_names = job.get('vms', [])
+    if vm_names:
+        _job_log(job_id, '  Re-inserting discovery ISO into VMs…')
+        _insert_cdroms(vm_names, iso_path, _log)
+        time.sleep(1)
+        _job_log(job_id, '  Rebooting VMs into discovery mode…')
+        _reboot_vms(vm_names, _log)
+    else:
+        _job_log(job_id, '  No VM list found — skipping ISO reinsert', 'warn')
+
+    # Reset job to pending so the resume loop runs from node registration
+    _job_set(job_id, status='pending', phase='Waiting for nodes (retry)', progress=45)
+
+    # Resume full deployment pipeline; it will skip cluster/ISO/VM creation
+    # since cluster_id, infra_env_id, and vms are already persisted.
+    _running_jobs.add(job_id)
+    threading.Thread(target=_run_deploy, args=(job_id, cfg),
+                     daemon=True, name=f'ocp-retry-{job_id}').start()
+
+    return jsonify({'action': 'retrying', 'ai_status': ai_status, 'vms_rebooted': len(vm_names)})
 
 
 # ── Kubeconfig download ───────────────────────────────────────────────────────
