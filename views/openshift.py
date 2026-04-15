@@ -1317,11 +1317,12 @@ def _run_deploy(job_id: str, cfg: dict):
         pending_handled = set()  # track VMs already rebooted for pending-user-action
 
         PHASE_PCT = {
-            'preparing-for-installation': 65,
-            'installing':                 70,
-            'installing-in-progress':     70,
-            'finalizing':                 88,
-            'installed':                  100,
+            'preparing-for-installation':     65,
+            'installing':                     70,
+            'installing-in-progress':         70,
+            'installing-pending-user-action': 72,
+            'finalizing':                     88,
+            'installed':                      100,
         }
 
         consecutive_errors = 0
@@ -1517,11 +1518,12 @@ def _monitor_install_thread(job_id: str, cfg: dict, cluster_id: str):
     vm_names     = _jobs.get(job_id, {}).get('vms', [])
 
     PHASE_PCT = {
-        'preparing-for-installation': 65,
-        'installing':                 70,
-        'installing-in-progress':     70,
-        'finalizing':                 88,
-        'installed':                  100,
+        'preparing-for-installation':      65,
+        'installing':                      70,
+        'installing-in-progress':          70,
+        'installing-pending-user-action':  72,
+        'finalizing':                      88,
+        'installed':                       100,
     }
 
     try:
@@ -1651,7 +1653,12 @@ def sync_job(job_id):
     _job_log(job_id, f'── Sync from Assisted Installer ──', 'warn')
     _job_log(job_id, f'  AI cluster status: {ai_status} — {status_info}')
 
-    INSTALLING = {'preparing-for-installation', 'installing', 'installing-in-progress', 'finalizing'}
+    INSTALLING = {
+        'preparing-for-installation', 'installing', 'installing-in-progress',
+        'finalizing', 'installing-pending-user-action',
+    }
+
+    vm_names = job.get('vms', [])
 
     if ai_status == 'installed':
         # Already done — just collect credentials in a quick thread
@@ -1671,6 +1678,20 @@ def sync_job(job_id):
 
     elif ai_status in INSTALLING:
         _job_set(job_id, phase='Installing OpenShift', progress=65)
+
+        # If nodes are stuck waiting for a reboot-from-disk, fix it immediately
+        # rather than waiting for the first monitor poll (30 s).
+        if 'pending-user-action' in ai_status and vm_names:
+            def _do_eject_log(msg, level='info'):
+                _job_log(job_id, msg, level)
+            _job_log(job_id, '  ⚠ Nodes pending user action — ejecting ISO and rebooting VMs…', 'warn')
+            try:
+                _eject_cdroms(vm_names, _do_eject_log)
+                time.sleep(2)
+                _reboot_vms(vm_names, _do_eject_log)
+            except Exception as ex:
+                _job_log(job_id, f'  Eject/reboot warning: {ex}', 'warn')
+
         threading.Thread(target=_monitor_install_thread,
                          args=(job_id, cfg, cluster_id),
                          daemon=True, name=f'ocp-sync-{job_id}').start()
