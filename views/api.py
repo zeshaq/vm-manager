@@ -516,10 +516,39 @@ def delete_vm(uuid):
 
     try:
         dom = conn.lookupByUUIDString(uuid)
+
+        # Collect disk paths before undefining
+        xml_str = dom.XMLDesc(libvirt.VIR_DOMAIN_XML_INACTIVE)
+        tree = ET.fromstring(xml_str)
+        disk_paths = []
+        for disk in tree.findall('devices/disk'):
+            if disk.get('device') in ('disk', 'cdrom'):
+                src = disk.find('source')
+                if src is not None:
+                    path = src.get('file') or src.get('dev')
+                    if path:
+                        disk_paths.append(path)
+
         if dom.isActive():
             dom.destroy()
         dom.undefine()
-        return jsonify({'success': True})
+
+        # Remove disk files — skip backing files (cloud base images)
+        deleted, skipped = [], []
+        for path in disk_paths:
+            if not os.path.exists(path):
+                continue
+            # Don't delete files in the cloud-images directory (shared base images)
+            if '/cloud-images/' in path:
+                skipped.append(path)
+                continue
+            try:
+                os.remove(path)
+                deleted.append(path)
+            except OSError as e:
+                skipped.append(path)
+
+        return jsonify({'success': True, 'deleted_disks': deleted, 'skipped_disks': skipped})
     except libvirt.libvirtError as e:
         return jsonify({'error': str(e)}), 500
     finally:
