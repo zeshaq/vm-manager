@@ -341,7 +341,8 @@ def get_vm(uuid):
                 'device': disk.get('device'),
                 'file': 'N/A',
                 'target': 'N/A',
-                'type': disk.get('type')
+                'type': disk.get('type'),
+                'boot_order': 0,
             }
             source = disk.find('source')
             if source is not None:
@@ -352,6 +353,10 @@ def get_vm(uuid):
             boot = disk.find('boot')
             if boot is not None:
                 order = boot.get('order')
+                try:
+                    disk_data['boot_order'] = int(order)
+                except (TypeError, ValueError):
+                    pass
                 if order in ['1', '2']:
                     current_boot[order] = f"disk|{disk_data['target']}"
             disks.append(disk_data)
@@ -832,8 +837,14 @@ def update_boot_order(uuid):
         return err
 
     data = request.get_json() or {}
-    boot1 = data.get('boot1')
-    boot2 = data.get('boot2')
+
+    # Accept either an ordered list: devices=['disk|vda','disk|vdb',...]
+    # or legacy boot1/boot2 strings
+    devices = data.get('devices')
+    if devices is None:
+        boot1 = data.get('boot1')
+        boot2 = data.get('boot2')
+        devices = [d for d in [boot1, boot2] if d]
 
     conn = get_db_connection()
     if not conn:
@@ -871,8 +882,9 @@ def update_boot_order(uuid):
                 if iface is not None:
                     ET.SubElement(iface, 'boot', {'order': str(num)})
 
-        apply_order(boot1, 1)
-        apply_order(boot2, 2)
+        for idx, dev in enumerate(devices, start=1):
+            apply_order(dev, idx)
+
         conn.defineXML(ET.tostring(tree).decode())
         return jsonify({'success': True})
 

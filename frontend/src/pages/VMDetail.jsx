@@ -2,7 +2,7 @@ import { useEffect, useState, useRef } from 'react'
 import { useParams, Link, useNavigate } from 'react-router-dom'
 import {
   Play, Square, Pencil, RefreshCw, HardDrive, Network, Cpu, Camera,
-  Trash2, PlusCircle, Monitor, Terminal, ChevronDown, X, ArrowUpDown
+  Trash2, PlusCircle, Monitor, Terminal, ChevronDown, X, GripVertical
 } from 'lucide-react'
 import api from '../api'
 
@@ -133,11 +133,15 @@ export default function VMDetail() {
   const [newIface, setNewIface] = useState({ mode: 'nat', source: '' })
   const [customSource, setCustomSource] = useState('')
 
-  // PCI / snapshots / boot
+  // PCI / snapshots
   const [newPci, setNewPci] = useState('')
   const [newSnap, setNewSnap] = useState('')
-  const [boot1, setBoot1] = useState('')
-  const [boot2, setBoot2] = useState('')
+
+  // drag-to-reorder boot order
+  const [diskOrder, setDiskOrder] = useState([])
+  const [bootSaving, setBootSaving] = useState(false)
+  const dragIdx = useRef(null)
+  const dragOverIdx = useRef(null)
 
   const [saving, setSaving] = useState({})
 
@@ -147,8 +151,13 @@ export default function VMDetail() {
     api.get(`/vms/${uuid}`)
       .then(r => {
         setVm(r.data)
-        setBoot1(r.data.boot_devices?.[0]?.value || '')
-        setBoot2(r.data.boot_devices?.[1]?.value || '')
+        // Sort disks: those with a boot_order first (ascending), then unordered
+        const sorted = [...(r.data.disks || [])].sort((a, b) => {
+          const ao = a.boot_order || 999
+          const bo = b.boot_order || 999
+          return ao - bo
+        })
+        setDiskOrder(sorted)
       })
       .catch(e => setError(e.response?.data?.error || 'Failed to load VM'))
       .finally(() => setLoading(false))
@@ -176,29 +185,34 @@ export default function VMDetail() {
     finally { setSaving(p => ({ ...p, [key]: false })) }
   }
 
-  /* save boot order — only refreshes disk + boot state */
-  const saveBoot = async () => {
-    setSaving(p => ({ ...p, boot: true }))
+  /* auto-save boot order after drag */
+  const saveBootOrder = async (order) => {
+    setBootSaving(true)
     try {
-      await api.put(`/vms/${uuid}/boot`, { boot1, boot2 })
-      const r = await api.get(`/vms/${uuid}`)
-      setVm(p => ({ ...p, disks: r.data.disks, boot_devices: r.data.boot_devices }))
-      setBoot1(r.data.boot_devices?.[0]?.value || '')
-      setBoot2(r.data.boot_devices?.[1]?.value || '')
+      await api.put(`/vms/${uuid}/boot`, {
+        devices: order.map(d => `disk|${d.target}`)
+      })
     } catch (e) {
-      alert(e.response?.data?.error || e.message || 'Error saving boot order')
+      // silent failure — order stays updated in UI
     } finally {
-      setSaving(p => ({ ...p, boot: false }))
+      setBootSaving(false)
     }
   }
 
-  /* toggle a disk's boot position: unset → 1 → 2 → unset */
-  const cycleBoot = (diskValue) => {
-    if (boot1 === diskValue) { setBoot1(boot2); setBoot2('') }
-    else if (boot2 === diskValue) { setBoot2('') }
-    else if (!boot1) { setBoot1(diskValue) }
-    else if (!boot2) { setBoot2(diskValue) }
-    else { setBoot2(diskValue) }
+  /* drag handlers */
+  const handleDragStart = (i) => { dragIdx.current = i }
+  const handleDragOver = (e, i) => { e.preventDefault(); dragOverIdx.current = i }
+  const handleDrop = () => {
+    const from = dragIdx.current
+    const to = dragOverIdx.current
+    if (from === null || to === null || from === to) return
+    const updated = [...diskOrder]
+    const [moved] = updated.splice(from, 1)
+    updated.splice(to, 0, moved)
+    setDiskOrder(updated)
+    saveBootOrder(updated)
+    dragIdx.current = null
+    dragOverIdx.current = null
   }
 
   /* resolved network source (handle custom input) */
@@ -272,12 +286,13 @@ export default function VMDetail() {
 
       {/* ── Disks ──────────────────────────────────────────────────── */}
       <Section title="Disks" icon={HardDrive}>
-        {vm.disks?.length > 0 ? (
+        {diskOrder.length > 0 ? (
           <>
             <table className="w-full text-sm mb-2">
               <thead>
                 <tr className="bg-navy-800 text-sky-400">
-                  <th className="px-3 py-2 text-left w-16">Boot</th>
+                  <th className="px-3 py-2 text-left w-10"></th>
+                  <th className="px-3 py-2 text-left w-12">Boot</th>
                   <th className="px-3 py-2 text-left">Target</th>
                   <th className="px-3 py-2 text-left">File</th>
                   <th className="px-3 py-2 text-left">Type</th>
@@ -286,48 +301,46 @@ export default function VMDetail() {
                 </tr>
               </thead>
               <tbody>
-                {vm.disks.map(d => {
-                  const dv = `disk|${d.target}`
-                  const bootPos = boot1 === dv ? 1 : boot2 === dv ? 2 : 0
-                  return (
-                    <tr key={d.target} className="border-b border-navy-500 hover:bg-navy-600">
-                      <td className="px-3 py-2">
-                        <button
-                          onClick={() => cycleBoot(dv)}
-                          title="Click to cycle boot position"
-                          className={`w-7 h-7 rounded-full text-xs font-bold transition-colors ${
-                            bootPos === 1 ? 'bg-sky-500 text-white' :
-                            bootPos === 2 ? 'bg-sky-700 text-sky-200' :
-                            'bg-navy-600 text-slate-500 hover:bg-navy-500'
-                          }`}>
-                          {bootPos || '—'}
-                        </button>
-                      </td>
-                      <td className="px-3 py-2 font-mono text-slate-300">{d.target}</td>
-                      <td className="px-3 py-2 text-slate-400 text-xs truncate max-w-xs" title={d.file}>{d.file}</td>
-                      <td className="px-3 py-2 text-slate-400">{d.type}</td>
-                      <td className="px-3 py-2 text-slate-400">{d.device}</td>
-                      <td className="px-3 py-2 text-right">
-                        <button
-                          onClick={() => act(`disk-${d.target}`, () => api.delete(`/vms/${uuid}/disks`, { data: { target_dev: d.target } }))}
-                          disabled={saving[`disk-${d.target}`]}
-                          className="p-1.5 rounded bg-red-900/60 hover:bg-red-800 text-red-400 disabled:opacity-50">
-                          <Trash2 size={13} />
-                        </button>
-                      </td>
-                    </tr>
-                  )
-                })}
+                {diskOrder.map((d, i) => (
+                  <tr
+                    key={d.target}
+                    draggable
+                    onDragStart={() => handleDragStart(i)}
+                    onDragOver={e => handleDragOver(e, i)}
+                    onDrop={handleDrop}
+                    className="border-b border-navy-500 hover:bg-navy-600 cursor-grab active:cursor-grabbing"
+                  >
+                    <td className="px-3 py-2 text-slate-500">
+                      <GripVertical size={14} />
+                    </td>
+                    <td className="px-3 py-2">
+                      <span className={`inline-flex items-center justify-center w-6 h-6 rounded-full text-xs font-bold ${
+                        i === 0 ? 'bg-sky-500 text-white' :
+                        i === 1 ? 'bg-sky-800 text-sky-200' :
+                        'bg-navy-600 text-slate-500'
+                      }`}>
+                        {i + 1}
+                      </span>
+                    </td>
+                    <td className="px-3 py-2 font-mono text-slate-300">{d.target}</td>
+                    <td className="px-3 py-2 text-slate-400 text-xs truncate max-w-xs" title={d.file}>{d.file}</td>
+                    <td className="px-3 py-2 text-slate-400">{d.type}</td>
+                    <td className="px-3 py-2 text-slate-400">{d.device}</td>
+                    <td className="px-3 py-2 text-right">
+                      <button
+                        onClick={() => act(`disk-${d.target}`, () => api.delete(`/vms/${uuid}/disks`, { data: { target_dev: d.target } }))}
+                        disabled={saving[`disk-${d.target}`]}
+                        className="p-1.5 rounded bg-red-900/60 hover:bg-red-800 text-red-400 disabled:opacity-50">
+                        <Trash2 size={13} />
+                      </button>
+                    </td>
+                  </tr>
+                ))}
               </tbody>
             </table>
-            <div className="flex items-center gap-3 mb-4">
-              <button
-                onClick={saveBoot}
-                disabled={saving['boot']}
-                className="flex items-center gap-1.5 bg-sky-600 hover:bg-sky-500 text-white px-3 py-1.5 rounded-md text-sm disabled:opacity-50">
-                <ArrowUpDown size={13} /> {saving['boot'] ? 'Saving…' : 'Save Boot Order'}
-              </button>
-              <span className="text-slate-500 text-xs">Click a boot number to cycle: 1st → 2nd → off</span>
+            <div className="flex items-center gap-2 mb-4">
+              <span className="text-slate-500 text-xs">Drag rows to reorder boot priority · top = boot 1</span>
+              {bootSaving && <span className="text-sky-400 text-xs">Saving…</span>}
             </div>
           </>
         ) : (
