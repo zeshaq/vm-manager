@@ -88,6 +88,7 @@ function prepareScript(image) {
   --run-command 'echo "ze ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/ze && chmod 440 /etc/sudoers.d/ze' \\
   --run-command 'systemctl disable cloud-init cloud-init-local cloud-config cloud-final 2>/dev/null || true' \\
   --run-command 'touch /etc/cloud/cloud-init.disabled' \\
+  --run-command 'mkdir -p /etc/netplan && printf "network:\\n  version: 2\\n  ethernets:\\n    all-en:\\n      match:\\n        name: \\"en*\\"\\n      dhcp4: true\\n    all-eth:\\n      match:\\n        name: \\"eth*\\"\\n      dhcp4: true\\n" > /etc/netplan/99-dhcp.yaml && chmod 600 /etc/netplan/99-dhcp.yaml' \\
   --selinux-relabel`
 }
 
