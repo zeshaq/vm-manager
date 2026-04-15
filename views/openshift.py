@@ -157,7 +157,13 @@ def _ai(method: str, path: str, token: str, body=None, stream=False, timeout=30)
     }
     resp = _req.request(method, url, headers=headers,
                         json=body, stream=stream, timeout=timeout)
-    resp.raise_for_status()
+    if not resp.ok:
+        try:
+            detail = resp.json()
+            msg = detail.get('message') or detail.get('reason') or str(detail)
+        except Exception:
+            msg = resp.text[:500]
+        raise Exception(f'{resp.status_code} {resp.reason}: {msg}')
     return resp
 
 
