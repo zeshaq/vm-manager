@@ -2,7 +2,7 @@ import { useEffect, useState, useRef } from 'react'
 import { useParams, Link, useNavigate } from 'react-router-dom'
 import {
   Play, Square, Pencil, RefreshCw, HardDrive, Network, Cpu, Camera,
-  Trash2, PlusCircle, Monitor, Terminal, Save, ChevronDown, X
+  Trash2, PlusCircle, Monitor, Terminal, ChevronDown, X, ArrowUpDown
 } from 'lucide-react'
 import api from '../api'
 
@@ -168,12 +168,37 @@ export default function VMDetail() {
     }).catch(() => {})
   }, [uuid])
 
-  /* generic action wrapper */
+  /* generic action wrapper — full refresh */
   const act = async (key, fn) => {
     setSaving(p => ({ ...p, [key]: true }))
     try { await fn(); fetchVM() }
     catch (e) { alert(e.response?.data?.error || e.message || 'Error') }
     finally { setSaving(p => ({ ...p, [key]: false })) }
+  }
+
+  /* save boot order — only refreshes disk + boot state */
+  const saveBoot = async () => {
+    setSaving(p => ({ ...p, boot: true }))
+    try {
+      await api.put(`/vms/${uuid}/boot`, { boot1, boot2 })
+      const r = await api.get(`/vms/${uuid}`)
+      setVm(p => ({ ...p, disks: r.data.disks, boot_devices: r.data.boot_devices }))
+      setBoot1(r.data.boot_devices?.[0]?.value || '')
+      setBoot2(r.data.boot_devices?.[1]?.value || '')
+    } catch (e) {
+      alert(e.response?.data?.error || e.message || 'Error saving boot order')
+    } finally {
+      setSaving(p => ({ ...p, boot: false }))
+    }
+  }
+
+  /* toggle a disk's boot position: unset → 1 → 2 → unset */
+  const cycleBoot = (diskValue) => {
+    if (boot1 === diskValue) { setBoot1(boot2); setBoot2('') }
+    else if (boot2 === diskValue) { setBoot2('') }
+    else if (!boot1) { setBoot1(diskValue) }
+    else if (!boot2) { setBoot2(diskValue) }
+    else { setBoot2(diskValue) }
   }
 
   /* resolved network source (handle custom input) */
@@ -182,8 +207,6 @@ export default function VMDetail() {
   if (loading) return <div className="text-sky-400 text-center py-20">Loading VM details…</div>
   if (error)   return <div className="text-red-400 text-center py-20">{error}</div>
   if (!vm)     return null
-
-  const bootOptions = vm.boot_devices || []
 
   return (
     <div className="space-y-5">
@@ -250,35 +273,63 @@ export default function VMDetail() {
       {/* ── Disks ──────────────────────────────────────────────────── */}
       <Section title="Disks" icon={HardDrive}>
         {vm.disks?.length > 0 ? (
-          <table className="w-full text-sm mb-4">
-            <thead>
-              <tr className="bg-navy-800 text-sky-400">
-                <th className="px-3 py-2 text-left">Target</th>
-                <th className="px-3 py-2 text-left">File</th>
-                <th className="px-3 py-2 text-left">Type</th>
-                <th className="px-3 py-2 text-left">Device</th>
-                <th className="px-3 py-2"></th>
-              </tr>
-            </thead>
-            <tbody>
-              {vm.disks.map(d => (
-                <tr key={d.target} className="border-b border-navy-500 hover:bg-navy-600">
-                  <td className="px-3 py-2 font-mono text-slate-300">{d.target}</td>
-                  <td className="px-3 py-2 text-slate-400 text-xs truncate max-w-xs" title={d.file}>{d.file}</td>
-                  <td className="px-3 py-2 text-slate-400">{d.type}</td>
-                  <td className="px-3 py-2 text-slate-400">{d.device}</td>
-                  <td className="px-3 py-2 text-right">
-                    <button
-                      onClick={() => act(`disk-${d.target}`, () => api.delete(`/vms/${uuid}/disks`, { data: { target_dev: d.target } }))}
-                      disabled={saving[`disk-${d.target}`]}
-                      className="p-1.5 rounded bg-red-900/60 hover:bg-red-800 text-red-400 disabled:opacity-50">
-                      <Trash2 size={13} />
-                    </button>
-                  </td>
+          <>
+            <table className="w-full text-sm mb-2">
+              <thead>
+                <tr className="bg-navy-800 text-sky-400">
+                  <th className="px-3 py-2 text-left w-16">Boot</th>
+                  <th className="px-3 py-2 text-left">Target</th>
+                  <th className="px-3 py-2 text-left">File</th>
+                  <th className="px-3 py-2 text-left">Type</th>
+                  <th className="px-3 py-2 text-left">Device</th>
+                  <th className="px-3 py-2"></th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {vm.disks.map(d => {
+                  const dv = `disk|${d.target}`
+                  const bootPos = boot1 === dv ? 1 : boot2 === dv ? 2 : 0
+                  return (
+                    <tr key={d.target} className="border-b border-navy-500 hover:bg-navy-600">
+                      <td className="px-3 py-2">
+                        <button
+                          onClick={() => cycleBoot(dv)}
+                          title="Click to cycle boot position"
+                          className={`w-7 h-7 rounded-full text-xs font-bold transition-colors ${
+                            bootPos === 1 ? 'bg-sky-500 text-white' :
+                            bootPos === 2 ? 'bg-sky-700 text-sky-200' :
+                            'bg-navy-600 text-slate-500 hover:bg-navy-500'
+                          }`}>
+                          {bootPos || '—'}
+                        </button>
+                      </td>
+                      <td className="px-3 py-2 font-mono text-slate-300">{d.target}</td>
+                      <td className="px-3 py-2 text-slate-400 text-xs truncate max-w-xs" title={d.file}>{d.file}</td>
+                      <td className="px-3 py-2 text-slate-400">{d.type}</td>
+                      <td className="px-3 py-2 text-slate-400">{d.device}</td>
+                      <td className="px-3 py-2 text-right">
+                        <button
+                          onClick={() => act(`disk-${d.target}`, () => api.delete(`/vms/${uuid}/disks`, { data: { target_dev: d.target } }))}
+                          disabled={saving[`disk-${d.target}`]}
+                          className="p-1.5 rounded bg-red-900/60 hover:bg-red-800 text-red-400 disabled:opacity-50">
+                          <Trash2 size={13} />
+                        </button>
+                      </td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+            <div className="flex items-center gap-3 mb-4">
+              <button
+                onClick={saveBoot}
+                disabled={saving['boot']}
+                className="flex items-center gap-1.5 bg-sky-600 hover:bg-sky-500 text-white px-3 py-1.5 rounded-md text-sm disabled:opacity-50">
+                <ArrowUpDown size={13} /> {saving['boot'] ? 'Saving…' : 'Save Boot Order'}
+              </button>
+              <span className="text-slate-500 text-xs">Click a boot number to cycle: 1st → 2nd → off</span>
+            </div>
+          </>
         ) : (
           <p className="text-slate-400 text-sm mb-4">No disks attached.</p>
         )}
@@ -517,27 +568,6 @@ export default function VMDetail() {
             </button>
           </div>
         )}
-      </Section>
-
-      {/* ── Boot Order ─────────────────────────────────────────────── */}
-      <Section title="Boot Order" icon={Save}>
-        <div className="flex flex-wrap gap-4 items-end">
-          {[['Boot 1', boot1, setBoot1], ['Boot 2', boot2, setBoot2]].map(([label, val, set]) => (
-            <div key={label}>
-              <label className="block text-xs text-slate-400 mb-1">{label}</label>
-              <select value={val} onChange={e => set(e.target.value)} className={inputCls()}>
-                <option value="">None</option>
-                {bootOptions.map(o => <option key={o.value} value={o.value}>{o.text}</option>)}
-              </select>
-            </div>
-          ))}
-          <button
-            onClick={() => act('boot', () => api.put(`/vms/${uuid}/boot`, { boot1, boot2 }))}
-            disabled={saving['boot']}
-            className="flex items-center gap-1.5 bg-sky-500 hover:bg-sky-400 text-white px-4 py-2 rounded-md text-sm disabled:opacity-50">
-            <Save size={14} /> Save Boot Order
-          </button>
-        </div>
       </Section>
 
       {/* ── Snapshots ──────────────────────────────────────────────── */}
