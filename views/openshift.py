@@ -61,8 +61,10 @@ _iso_lock = threading.Lock()
 
 
 def _iso_fingerprint(ocp_version: str, pull_secret: str, ssh_public_key: str) -> str:
-    """Stable key for an (version, pull_secret, ssh_key) combination."""
-    raw = f'{ocp_version}|{pull_secret.strip()}|{ssh_public_key.strip()}'
+    """Stable key for a DHCP (version, pull_secret, ssh_key) combination.
+    Static IP deployments must never use the cache — their MAC/IP config
+    is deployment-specific and embedded in the infra-env/ISO."""
+    raw = f'dhcp|{ocp_version}|{pull_secret.strip()}|{ssh_public_key.strip()}'
     return hashlib.sha256(raw.encode()).hexdigest()[:16]
 
 
@@ -818,10 +820,16 @@ def _run_deploy(job_id: str, cfg: dict):
 
         # ── Step 3: Create infra-env (or reuse cached) ───────────────────────
         phase('Creating infrastructure environment', 18)
+        use_static_ip = bool(cfg.get('static_ip_enabled') and cfg.get('node_ips'))
         iso_fingerprint = _iso_fingerprint(
             cfg['ocp_version'], cfg['pull_secret'], cfg.get('ssh_public_key', '')
         )
-        cached_infra_env_id, cached_iso_path = _get_cached_iso(iso_fingerprint)
+        # Static IP config (MAC→IP) is deployment-specific and baked into the ISO —
+        # never reuse a cached ISO for static IP deployments.
+        if use_static_ip:
+            cached_infra_env_id, cached_iso_path = None, None
+        else:
+            cached_infra_env_id, cached_iso_path = _get_cached_iso(iso_fingerprint)
         infra_payload = {
             'name':              f'{cluster_name}-infra',
             'cluster_id':        cluster_id,
@@ -882,8 +890,13 @@ def _run_deploy(job_id: str, cfg: dict):
 
             # ── Step 4: Download discovery ISO ───────────────────────────────
             phase('Downloading discovery ISO', 22)
-            iso_path = ISO_CACHE_DIR / iso_fingerprint / 'discovery.iso'
-            iso_path.parent.mkdir(parents=True, exist_ok=True)
+            # Static IP ISOs are deployment-specific — store in job dir, not cache
+            if use_static_ip:
+                iso_path = job_dir / 'discovery.iso'
+                iso_path.parent.mkdir(parents=True, exist_ok=True)
+            else:
+                iso_path = ISO_CACHE_DIR / iso_fingerprint / 'discovery.iso'
+                iso_path.parent.mkdir(parents=True, exist_ok=True)
             try:
                 r = _ai('GET', f'/infra-envs/{infra_env_id}/downloads/image-url', token)
                 iso_url = r.json()['url']
@@ -899,7 +912,10 @@ def _run_deploy(job_id: str, cfg: dict):
                             if total:
                                 pct = 22 + int(done / total * 10)
                                 _job_set(job_id, progress=pct)
-                log(f'ISO downloaded and cached ✓')
+                if use_static_ip:
+                    log(f'ISO downloaded (static IP — not cached) ✓')
+                else:
+                    log(f'ISO downloaded and cached ✓')
                 # QEMU runs as libvirt-qemu — ensure file + parent dirs are world-readable
                 os.chmod(iso_path, 0o644)
                 p = iso_path.parent
@@ -909,10 +925,11 @@ def _run_deploy(job_id: str, cfg: dict):
                     except Exception:
                         pass
                     p = p.parent
-                # Save to cache for future deployments
-                _store_iso_cache(iso_fingerprint, infra_env_id, iso_path,
-                                 cfg['ocp_version'], cfg['pull_secret'],
-                                 cfg.get('ssh_public_key', ''))
+                # Only cache DHCP ISOs — static IP ISOs are deployment-specific
+                if not use_static_ip:
+                    _store_iso_cache(iso_fingerprint, infra_env_id, iso_path,
+                                     cfg['ocp_version'], cfg['pull_secret'],
+                                     cfg.get('ssh_public_key', ''))
             except Exception as e:
                 fail(f'ISO download failed: {e}')
                 return
