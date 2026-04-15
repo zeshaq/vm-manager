@@ -24,7 +24,7 @@ images_bp = Blueprint('images', __name__)
 
 APP_DIR       = Path(__file__).parent.parent
 REGISTRY_FILE = APP_DIR / 'image_registry.json'
-IMAGES_DIR    = Path('/var/lib/libvirt/images')
+IMAGES_DIR    = Path('/var/lib/libvirt/images/cloud-images')
 
 # In-memory download jobs: { job_id: {downloaded, total, status, error, image_id} }
 _DOWNLOADS: dict = {}

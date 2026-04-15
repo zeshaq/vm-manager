@@ -1,9 +1,8 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import api from '../api'
 import {
-  Download, Trash2, Upload, Plus, CheckCircle, XCircle,
-  RefreshCw, HardDrive, ExternalLink, ChevronDown, ChevronRight,
-  Image as ImageIcon, Globe, AlertTriangle,
+  Download, Trash2, RefreshCw, HardDrive,
+  CheckCircle, ChevronDown, ChevronRight, Cloud, Plus,
 } from 'lucide-react'
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -34,13 +33,6 @@ function OsBadge({ os }) {
       {os}
     </span>
   )
-}
-
-function StatusDot({ status }) {
-  if (status === 'available')   return <span className="w-2 h-2 rounded-full bg-emerald-400 inline-block"/>
-  if (status === 'downloading') return <span className="w-2 h-2 rounded-full bg-sky-400 animate-pulse inline-block"/>
-  if (status === 'failed')      return <span className="w-2 h-2 rounded-full bg-red-400 inline-block"/>
-  return <span className="w-2 h-2 rounded-full bg-slate-500 inline-block"/>
 }
 
 function Card({ children, className = '' }) {
@@ -88,11 +80,11 @@ function ProgressBar({ jobId, onDone }) {
   )
 }
 
-// ── Registered image card ─────────────────────────────────────────────────────
+// ── Image card ────────────────────────────────────────────────────────────────
 
 function ImageCard({ image, onDeleted }) {
   const [confirming, setConfirming] = useState(false)
-  const [deleteFile, setDeleteFile] = useState(false)
+  const [deleteFile, setDeleteFile] = useState(true)
   const [deleting,   setDeleting]   = useState(false)
   const [jobDone,    setJobDone]    = useState(false)
 
@@ -113,72 +105,58 @@ function ImageCard({ image, onDeleted }) {
 
   return (
     <div className="flex items-start gap-4 bg-navy-750 border border-navy-500 rounded-lg p-4 hover:border-navy-400 transition-colors">
-      {/* Icon */}
       <div className="w-10 h-10 rounded-lg bg-navy-700 flex items-center justify-center flex-shrink-0">
-        <HardDrive size={20} className="text-sky-400"/>
+        <Cloud size={20} className="text-sky-400"/>
       </div>
 
-      {/* Info */}
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-2 flex-wrap">
-          <StatusDot status={isDownloading ? 'downloading' : image.status}/>
+          {isDownloading
+            ? <span className="w-2 h-2 rounded-full bg-sky-400 animate-pulse inline-block"/>
+            : image.status === 'failed'
+              ? <span className="w-2 h-2 rounded-full bg-red-400 inline-block"/>
+              : <span className="w-2 h-2 rounded-full bg-emerald-400 inline-block"/>
+          }
           <span className="text-slate-100 font-medium text-sm">{image.name}</span>
           <OsBadge os={image.os}/>
           {image.version && <span className="text-xs text-slate-500">v{image.version}</span>}
-          {image.k8s_compatible && (
-            <span className="text-xs text-emerald-400 border border-emerald-400/30 px-1.5 py-0.5 rounded">K8s</span>
-          )}
         </div>
-        <p className="text-slate-500 text-xs mt-0.5 truncate">{image.path}</p>
+        <p className="text-slate-500 text-xs mt-0.5 font-mono truncate">{image.path}</p>
         <div className="flex gap-4 mt-1 text-xs text-slate-500">
           {image.format && image.format !== 'unknown' && <span>{image.format}</span>}
-          {image.size > 0 && <span>on disk: {fmt(image.size)}</span>}
-          {image.virtual_size > 0 && <span>virtual: {fmt(image.virtual_size)}</span>}
+          {image.size > 0 && <span>{fmt(image.size)} on disk</span>}
+          {image.virtual_size > 0 && <span>{fmt(image.virtual_size)} virtual</span>}
         </div>
         {isDownloading && (
-          <ProgressBar jobId={image.job_id} onDone={status => {
-            setJobDone(true)
-            onDeleted() // triggers parent refresh
-          }}/>
+          <ProgressBar jobId={image.job_id} onDone={() => { setJobDone(true); onDeleted() }}/>
         )}
         {image.status === 'failed' && image.error && (
           <p className="text-red-400 text-xs mt-1">{image.error}</p>
         )}
       </div>
 
-      {/* Actions */}
       {image.status !== 'downloading' && (
         <div className="flex flex-col items-end gap-1 flex-shrink-0">
           {confirming && (
             <label className="flex items-center gap-1.5 text-xs text-slate-400 cursor-pointer mb-1">
-              <input
-                type="checkbox"
-                checked={deleteFile}
-                onChange={e => setDeleteFile(e.target.checked)}
-                className="accent-red-500"
-              />
-              Also delete file
+              <input type="checkbox" checked={deleteFile} onChange={e => setDeleteFile(e.target.checked)} className="accent-red-500"/>
+              Delete file
             </label>
           )}
           <div className="flex gap-1">
             {confirming && (
-              <button
-                onClick={() => setConfirming(false)}
-                className="text-xs px-2 py-1 rounded text-slate-400 hover:text-slate-200 hover:bg-navy-700 transition-colors"
-              >
+              <button onClick={() => setConfirming(false)}
+                className="text-xs px-2 py-1 rounded text-slate-400 hover:text-slate-200 hover:bg-navy-700 transition-colors">
                 Cancel
               </button>
             )}
-            <button
-              onClick={handleDelete}
-              disabled={deleting}
+            <button onClick={handleDelete} disabled={deleting}
               className={`p-1.5 rounded transition-colors disabled:opacity-40 ${
                 confirming
                   ? 'text-red-400 bg-red-400/10 hover:bg-red-400/20 border border-red-400/30'
                   : 'text-slate-500 hover:text-red-400 hover:bg-navy-700'
               }`}
-              title={confirming ? 'Confirm delete' : 'Remove from registry'}
-            >
+              title={confirming ? 'Confirm delete' : 'Delete'}>
               <Trash2 size={14}/>
             </button>
           </div>
@@ -188,7 +166,7 @@ function ImageCard({ image, onDeleted }) {
   )
 }
 
-// ── Catalog panel ─────────────────────────────────────────────────────────────
+// ── Catalog ───────────────────────────────────────────────────────────────────
 
 function CatalogItem({ item, onDownload }) {
   const [loading, setLoading] = useState(false)
@@ -204,9 +182,6 @@ function CatalogItem({ item, onDownload }) {
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-2">
           <span className="text-slate-200 text-sm font-medium">{item.name}</span>
-          {item.k8s_compatible && (
-            <span className="text-xs text-emerald-400 border border-emerald-400/30 px-1.5 py-0.5 rounded">K8s</span>
-          )}
         </div>
         <p className="text-slate-500 text-xs mt-0.5">{item.description}</p>
       </div>
@@ -215,11 +190,8 @@ function CatalogItem({ item, onDownload }) {
           <CheckCircle size={13}/> Downloaded
         </span>
       ) : (
-        <button
-          onClick={handle}
-          disabled={loading}
-          className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-sky-600 hover:bg-sky-500 disabled:opacity-50 text-white text-xs rounded font-medium transition-colors"
-        >
+        <button onClick={handle} disabled={loading}
+          className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-sky-600 hover:bg-sky-500 disabled:opacity-50 text-white text-xs rounded font-medium transition-colors">
           {loading ? <RefreshCw size={12} className="animate-spin"/> : <Download size={12}/>}
           Download
         </button>
@@ -228,15 +200,15 @@ function CatalogItem({ item, onDownload }) {
   )
 }
 
-// ── Custom URL / upload form ──────────────────────────────────────────────────
+// ── Add custom image form ─────────────────────────────────────────────────────
 
 function AddImageForm({ onAdded }) {
-  const [mode, setMode]     = useState('url')   // 'url' | 'upload' | 'path'
-  const [open, setOpen]     = useState(false)
-  const [form, setForm]     = useState({ name: '', url: '', path: '', os: 'linux', version: '', description: '' })
-  const [err, setErr]       = useState('')
+  const [open,    setOpen]    = useState(false)
+  const [form,    setForm]    = useState({ name: '', url: '' })
+  const [err,     setErr]     = useState('')
   const [loading, setLoading] = useState(false)
-  const fileRef             = useRef(null)
+  const fileRef = useRef(null)
+  const [mode,  setMode]  = useState('url')
 
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }))
 
@@ -254,17 +226,10 @@ function AddImageForm({ onAdded }) {
         fd.append('name', form.name)
         await api.post('/images/upload', fd)
       } else {
-        const field = mode === 'url' ? 'url' : 'path'
-        if (!form[field].trim()) { setErr(`${field} required`); setLoading(false); return }
-        await api.post('/images', {
-          name: form.name,
-          [field]: form[field].trim(),
-          os: form.os,
-          version: form.version,
-          description: form.description,
-        })
+        if (!form.url.trim()) { setErr('URL required'); setLoading(false); return }
+        await api.post('/images', { name: form.name, url: form.url.trim() })
       }
-      setForm({ name: '', url: '', path: '', os: 'linux', version: '', description: '' })
+      setForm({ name: '', url: '' })
       setOpen(false)
       onAdded()
     } catch (ex) {
@@ -276,10 +241,7 @@ function AddImageForm({ onAdded }) {
 
   return (
     <Card className="mb-5">
-      <button
-        className="flex items-center gap-2 w-full text-left"
-        onClick={() => setOpen(o => !o)}
-      >
+      <button className="flex items-center gap-2 w-full text-left" onClick={() => setOpen(o => !o)}>
         {open ? <ChevronDown size={16}/> : <ChevronRight size={16}/>}
         <span className="text-slate-200 font-semibold">Add Custom Image</span>
         {!open && <Plus size={14} className="text-sky-400 ml-1"/>}
@@ -287,45 +249,27 @@ function AddImageForm({ onAdded }) {
 
       {open && (
         <div className="mt-4">
-          {/* Mode tabs */}
           <div className="flex gap-1 mb-4 bg-navy-900 rounded p-1 w-fit">
-            {[['url','URL'], ['upload','Upload file'], ['path','Existing path']].map(([m, label]) => (
-              <button
-                key={m}
-                onClick={() => setMode(m)}
+            {[['url','Download from URL'], ['upload','Upload file']].map(([m, label]) => (
+              <button key={m} onClick={() => setMode(m)}
                 className={`px-3 py-1.5 rounded text-xs font-medium transition-colors ${
                   mode === m ? 'bg-sky-600 text-white' : 'text-slate-400 hover:text-slate-200'
-                }`}
-              >{label}</button>
+                }`}>{label}</button>
             ))}
           </div>
 
           <form onSubmit={submit} className="space-y-3">
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <label className="block text-xs text-slate-400 mb-1">Name</label>
-                <input
-                  className="w-full bg-navy-700 border border-navy-400 rounded px-3 py-2 text-sm text-slate-100 focus:outline-none focus:border-sky-500"
-                  placeholder="My custom image"
-                  value={form.name}
-                  onChange={e => set('name', e.target.value)}
-                />
-              </div>
-              <div>
-                <label className="block text-xs text-slate-400 mb-1">OS</label>
-                <select
-                  className="w-full bg-navy-700 border border-navy-400 rounded px-3 py-2 text-sm text-slate-100 focus:outline-none focus:border-sky-500"
-                  value={form.os}
-                  onChange={e => set('os', e.target.value)}
-                >
-                  {['ubuntu','debian','rocky','almalinux','centos','fedora','linux'].map(o => (
-                    <option key={o} value={o}>{o}</option>
-                  ))}
-                </select>
-              </div>
+            <div>
+              <label className="block text-xs text-slate-400 mb-1">Name</label>
+              <input
+                className="w-full bg-navy-700 border border-navy-400 rounded px-3 py-2 text-sm text-slate-100 focus:outline-none focus:border-sky-500"
+                placeholder="my-custom-image"
+                value={form.name}
+                onChange={e => set('name', e.target.value)}
+              />
             </div>
 
-            {mode === 'url' && (
+            {mode === 'url' ? (
               <div>
                 <label className="block text-xs text-slate-400 mb-1">URL</label>
                 <input
@@ -335,37 +279,22 @@ function AddImageForm({ onAdded }) {
                   onChange={e => set('url', e.target.value)}
                 />
               </div>
-            )}
-            {mode === 'upload' && (
+            ) : (
               <div>
                 <label className="block text-xs text-slate-400 mb-1">File (.img / .qcow2)</label>
-                <input ref={fileRef} type="file" accept=".img,.qcow2,.raw,.vmdk"
+                <input ref={fileRef} type="file" accept=".img,.qcow2,.raw"
                   className="block w-full text-sm text-slate-300 file:mr-3 file:py-1.5 file:px-3 file:rounded file:border-0 file:bg-navy-600 file:text-slate-200 file:text-xs hover:file:bg-navy-500"
-                />
-              </div>
-            )}
-            {mode === 'path' && (
-              <div>
-                <label className="block text-xs text-slate-400 mb-1">Absolute path on server</label>
-                <input
-                  className="w-full bg-navy-700 border border-navy-400 rounded px-3 py-2 text-sm text-slate-100 focus:outline-none focus:border-sky-500 font-mono"
-                  placeholder="/var/lib/libvirt/images/myimage.qcow2"
-                  value={form.path}
-                  onChange={e => set('path', e.target.value)}
                 />
               </div>
             )}
 
             {err && <p className="text-red-400 text-sm">{err}</p>}
 
-            <button
-              type="submit"
-              disabled={loading}
-              className="inline-flex items-center gap-2 px-4 py-2 bg-sky-600 hover:bg-sky-500 disabled:opacity-50 text-white text-sm rounded font-medium transition-colors"
-            >
+            <button type="submit" disabled={loading}
+              className="inline-flex items-center gap-2 px-4 py-2 bg-sky-600 hover:bg-sky-500 disabled:opacity-50 text-white text-sm rounded font-medium transition-colors">
               {loading
                 ? <><RefreshCw size={13} className="animate-spin"/>Processing…</>
-                : <><Plus size={13}/>{mode === 'upload' ? 'Upload' : mode === 'url' ? 'Download' : 'Register'}</>
+                : <><Download size={13}/>{mode === 'upload' ? 'Upload' : 'Download'}</>
               }
             </button>
           </form>
@@ -398,7 +327,6 @@ export default function Images() {
 
   useEffect(() => { load() }, [load])
 
-  // Auto-refresh while any image is downloading
   useEffect(() => {
     const anyDl = images.some(i => i.status === 'downloading')
     if (!anyDl) return
@@ -410,12 +338,8 @@ export default function Images() {
 
   const handleCatalogDownload = async (item) => {
     await api.post('/images', {
-      name:        item.name,
-      url:         item.url,
-      filename:    item.filename,
-      os:          item.os,
-      version:     item.version,
-      description: item.description,
+      name: item.name, url: item.url, filename: item.filename,
+      os: item.os, version: item.version, description: item.description,
     })
     await load()
   }
@@ -434,72 +358,63 @@ export default function Images() {
   return (
     <div className="max-w-4xl mx-auto">
 
+      <div className="mb-5">
+        <p className="text-slate-400 text-sm">
+          Cloud images are stored in <code className="text-sky-400 bg-navy-800 px-1.5 py-0.5 rounded text-xs">/var/lib/libvirt/images/cloud-images/</code> and used as base images when attaching a cloud image to a VM.
+        </p>
+      </div>
+
       {/* Catalog */}
       <Card className="mb-5">
-        <button
-          className="flex items-center gap-2 w-full text-left"
-          onClick={() => setCatOpen(o => !o)}
-        >
+        <button className="flex items-center gap-2 w-full text-left" onClick={() => setCatOpen(o => !o)}>
           {catOpen ? <ChevronDown size={16}/> : <ChevronRight size={16}/>}
           <span className="text-slate-200 font-semibold">Image Catalog</span>
           <span className="text-slate-500 text-xs ml-1">
             — {catalog.filter(c => c.downloaded).length}/{catalog.length} downloaded
           </span>
         </button>
-
         {catOpen && (
           <div className="mt-4">
             {catalog.map(item => (
-              <CatalogItem
-                key={item.filename}
-                item={item}
-                onDownload={handleCatalogDownload}
-              />
+              <CatalogItem key={item.filename} item={item} onDownload={handleCatalogDownload}/>
             ))}
           </div>
         )}
       </Card>
 
-      {/* Custom add form */}
-      <AddImageForm onAdded={load} />
+      {/* Custom add */}
+      <AddImageForm onAdded={load}/>
 
-      {/* In-progress downloads */}
+      {/* In-progress */}
       {inProgress.length > 0 && (
         <div className="mb-5">
           <h2 className="text-slate-400 text-sm font-medium mb-2">Downloading</h2>
           <div className="space-y-2">
-            {inProgress.map(img => (
-              <ImageCard key={img.id} image={img} onDeleted={load}/>
-            ))}
+            {inProgress.map(img => <ImageCard key={img.id} image={img} onDeleted={load}/>)}
           </div>
         </div>
       )}
 
-      {/* Available images */}
+      {/* Available */}
       <div>
         <div className="flex items-center justify-between mb-3">
           <h2 className="text-slate-200 font-semibold text-base">
-            Available Images ({available.length})
+            Cloud Images ({available.length})
           </h2>
-          <button
-            onClick={load}
-            className="flex items-center gap-1.5 text-xs text-slate-400 hover:text-sky-400 transition-colors"
-          >
-            <RefreshCw size={13}/>Refresh
+          <button onClick={load} className="flex items-center gap-1.5 text-xs text-slate-400 hover:text-sky-400 transition-colors">
+            <RefreshCw size={13}/> Refresh
           </button>
         </div>
 
         {available.length === 0 ? (
           <Card>
             <p className="text-slate-500 text-sm text-center py-6">
-              No images yet. Download one from the catalog above.
+              No cloud images yet. Download one from the catalog above.
             </p>
           </Card>
         ) : (
           <div className="space-y-2">
-            {available.map(img => (
-              <ImageCard key={img.id} image={img} onDeleted={load}/>
-            ))}
+            {available.map(img => <ImageCard key={img.id} image={img} onDeleted={load}/>)}
           </div>
         )}
       </div>
