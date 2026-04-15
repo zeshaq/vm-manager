@@ -129,7 +129,6 @@ export default function VMDetail() {
   const [diskTab, setDiskTab] = useState('attach')
   const [cloudImage, setCloudImage] = useState('')
   const [cloudDiskSize, setCloudDiskSize] = useState('20')
-  const [skipCloudInit, setSkipCloudInit] = useState(false)
 
   // network
   const [newIface, setNewIface] = useState({ mode: 'nat', source: '' })
@@ -413,8 +412,7 @@ export default function VMDetail() {
           <div className="bg-navy-800 border border-navy-500 rounded-lg p-4 space-y-3">
             <p className="text-slate-400 text-sm">
               Creates a qcow2 overlay backed by the selected cloud image and attaches it.
-              {!skipCloudInit && <> A cloud-init seed ISO will also be created to set up user <code className="text-sky-400 bg-navy-700 px-1 rounded">ze</code> / <code className="text-sky-400 bg-navy-700 px-1 rounded">ze</code> on first boot.</>}
-              {skipCloudInit && <> No cloud-init ISO — use this if the image was already prepared with virt-customize.</>}
+              Prepare the image with virt-customize first to bake in credentials.
             </p>
             {cloudImages.length === 0 ? (
               <p className="text-yellow-400 text-sm">No images found in <code className="bg-navy-700 px-1 rounded">/var/lib/libvirt/images/cloud-images/</code>. Place cloud images there first.</p>
@@ -431,7 +429,7 @@ export default function VMDetail() {
                     ))}
                   </select>
                 </div>
-                <div className="flex gap-2 items-end flex-wrap">
+                <div className="flex gap-2 items-end">
                   <div>
                     <label className="block text-xs text-slate-400 mb-1">Boot disk size (GB)</label>
                     <input
@@ -443,26 +441,15 @@ export default function VMDetail() {
                       className={inputCls('w-28')}
                     />
                   </div>
-                  <label className="flex items-center gap-2 text-sm text-slate-400 cursor-pointer pb-2">
-                    <input
-                      type="checkbox"
-                      checked={skipCloudInit}
-                      onChange={e => setSkipCloudInit(e.target.checked)}
-                      className="rounded"
-                    />
-                    Skip cloud-init (image already prepared)
-                  </label>
                   <button
                     onClick={() => {
                       if (!cloudImage) return
                       act('cloud-image', () => api.post(`/vms/${uuid}/cloud-image`, {
                         base_image: cloudImage,
                         disk_size_gb: parseInt(cloudDiskSize) || 20,
-                        skip_cloud_init: skipCloudInit,
                       }))
                       setCloudImage('')
                       setCloudDiskSize('20')
-                      setSkipCloudInit(false)
                       setDiskTab('attach')
                     }}
                     disabled={saving['cloud-image'] || !cloudImage}

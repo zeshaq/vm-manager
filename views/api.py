@@ -715,7 +715,6 @@ def attach_cloud_image(uuid):
     data = request.get_json() or {}
     base_image = str(data.get('base_image', '')).strip()
     disk_size_gb = int(data.get('disk_size_gb') or 20)
-    skip_cloud_init = bool(data.get('skip_cloud_init', False))
     if not base_image:
         return jsonify({'error': 'base_image is required'}), 400
     if not os.path.exists(base_image):
@@ -730,9 +729,7 @@ def attach_cloud_image(uuid):
         vm_name = dom.name()
         safe_name = re.sub(r'[^a-zA-Z0-9._-]', '_', vm_name)
 
-        created = []
-
-        # 1. qcow2 overlay
+        # Create qcow2 overlay backed by the pre-prepared cloud image
         overlay = os.path.join(STORAGE_PATH, f'{safe_name}.qcow2')
         if os.path.exists(overlay):
             return jsonify({'error': f'Overlay already exists: {os.path.basename(overlay)}'}), 409
@@ -740,97 +737,34 @@ def attach_cloud_image(uuid):
             ['qemu-img', 'create', '-f', 'qcow2', '-b', base_image, '-F', 'qcow2', overlay, f'{disk_size_gb}G'],
             check=True, capture_output=True, text=True
         )
-        created.append(overlay)
 
-        # 2. cloud-init seed ISO — skip if image was already prepared with virt-customize
-        import tempfile, shutil
-        seed_iso = None
-        if not skip_cloud_init:
-            seed_iso = os.path.join('/tmp', f'{safe_name}-seed.iso')
-            # Generate a proper SHA-512 password hash so the password is permanent
-            pw_result = subprocess.run(
-                ['openssl', 'passwd', '-6', 'ze'],
-                capture_output=True, text=True, check=True
-            )
-            passwd_hash = pw_result.stdout.strip()
-            user_data = f"""\
-#cloud-config
-hostname: {vm_name}
-users:
-  - name: ze
-    groups: sudo,adm,wheel
-    sudo: ALL=(ALL) NOPASSWD:ALL
-    shell: /bin/bash
-    lock_passwd: false
-    passwd: {passwd_hash}
-chpasswd:
-  expire: false
-ssh_pwauth: true
-write_files:
-  - path: /etc/sudoers.d/ze
-    content: "ze ALL=(ALL) NOPASSWD:ALL\\n"
-    permissions: '0440'
-runcmd:
-  - touch /etc/cloud/cloud-init.disabled
-  - systemctl disable cloud-init cloud-init-local cloud-config cloud-final 2>/dev/null || true
-"""
-            meta_data = f"instance-id: {safe_name}\nlocal-hostname: {vm_name}\n"
-            tmp = tempfile.mkdtemp()
-            try:
-                with open(os.path.join(tmp, 'user-data'), 'w') as f: f.write(user_data)
-                with open(os.path.join(tmp, 'meta-data'), 'w') as f: f.write(meta_data)
-                subprocess.run(
-                    [CLOUD_LOCALDS_BIN, seed_iso, os.path.join(tmp, 'user-data'), os.path.join(tmp, 'meta-data')],
-                    check=True, capture_output=True, text=True
-                )
-                created.append(seed_iso)
-            finally:
-                shutil.rmtree(tmp, ignore_errors=True)
-
-        # 3. attach overlay (and seed ISO if created)
+        # Attach overlay disk
         flags = libvirt.VIR_DOMAIN_AFFECT_CONFIG
         if dom.isActive():
             flags |= libvirt.VIR_DOMAIN_AFFECT_LIVE
 
-        attach_paths = [overlay] + ([seed_iso] if seed_iso else [])
-        for path in attach_paths:
-            is_iso = path.endswith('.iso')
-            bus = 'sata' if is_iso else 'virtio'
-            # find next free target device
-            xml_str = dom.XMLDesc(libvirt.VIR_DOMAIN_XML_INACTIVE)
-            tree = ET.fromstring(xml_str)
-            used = {d.find('target').get('dev') for d in tree.findall('devices/disk') if d.find('target') is not None}
-            if is_iso:
-                idx = next(i for i in range(26) if f'sd{chr(ord("a")+i)}' not in used)
-                target = f'sd{chr(ord("a")+idx)}'
-                disk_xml = f"""<disk type='file' device='cdrom'>
-  <driver name='qemu' type='raw'/>
-  <source file='{path}'/>
-  <target dev='{target}' bus='sata'/>
-  <readonly/>
-</disk>"""
-            else:
-                idx = next(i for i in range(26) if f'vd{chr(ord("a")+i)}' not in used)
-                target = f'vd{chr(ord("a")+idx)}'
-                disk_xml = f"""<disk type='file' device='disk'>
+        xml_str = dom.XMLDesc(libvirt.VIR_DOMAIN_XML_INACTIVE)
+        tree = ET.fromstring(xml_str)
+        used = {d.find('target').get('dev') for d in tree.findall('devices/disk') if d.find('target') is not None}
+        idx = next(i for i in range(26) if f'vd{chr(ord("a")+i)}' not in used)
+        target = f'vd{chr(ord("a")+idx)}'
+        disk_xml = f"""<disk type='file' device='disk'>
   <driver name='qemu' type='qcow2' cache='none'/>
-  <source file='{path}'/>
+  <source file='{overlay}'/>
   <target dev='{target}' bus='virtio'/>
 </disk>"""
-            dom.attachDeviceFlags(disk_xml, flags)
+        dom.attachDeviceFlags(disk_xml, flags)
 
-        current_app.logger.info(f'Cloud image setup for {vm_name}: overlay={overlay}, seed={seed_iso}')
-        return jsonify({'success': True, 'overlay': overlay, 'seed_iso': seed_iso}), 200
+        current_app.logger.info(f'Cloud image overlay attached for {vm_name}: {overlay}')
+        return jsonify({'success': True, 'overlay': overlay}), 200
 
     except subprocess.CalledProcessError as e:
-        for p in created:
-            try: os.remove(p)
-            except OSError: pass
+        try: os.remove(overlay)
+        except OSError: pass
         return jsonify({'error': f'Disk setup failed: {e.stderr.strip()}'}), 500
     except libvirt.libvirtError as e:
-        for p in created:
-            try: os.remove(p)
-            except OSError: pass
+        try: os.remove(overlay)
+        except OSError: pass
         return jsonify({'error': str(e)}), 500
     finally:
         conn.close()
