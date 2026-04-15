@@ -209,6 +209,7 @@ def create_vm():
     cpu = data.get('cpu')
     host_cpu = data.get('host_cpu', False)
     devices = data.get('devices', [])
+    base_image = str(data.get('base_image', '')).strip() or None
 
     # Multi-disk support: `disks` is a list of {path, size_gb}.
     # Legacy single-disk fields (disk_path / disk_size_gb) are still accepted.
@@ -218,6 +219,10 @@ def create_vm():
         legacy_path = str(data.get('disk_path', '')).strip() or None
         legacy_size = data.get('disk_size_gb', 20)
         raw_disks = [{'path': legacy_path, 'size_gb': legacy_size}] if legacy_path else []
+
+    # base_image is a shorthand for a single cloud image disk
+    if base_image and not any(str(d.get('path', '')).strip() == base_image for d in raw_disks):
+        raw_disks = [{'path': base_image, 'size_gb': 20}] + list(raw_disks)
 
     if not name or not ram or not cpu:
         return jsonify({'error': 'Missing required fields: name, ram, cpu'}), 400
@@ -282,6 +287,47 @@ def create_vm():
                     except OSError: pass
                 return jsonify({'error': f'Failed to create disk overlay: {exc.stderr.strip()}'}), 500
 
+    # Cloud-init seed ISO ──────────────────────────────────────────────────────
+    # If a base image was provided, generate a seed ISO so the VM boots with
+    # user ze / password ze pre-configured (no manual cloud-init needed).
+    seed_iso = None
+    if base_image:
+        import tempfile, shutil
+        seed_iso = os.path.join(STORAGE_PATH, f'{safe_name}-seed.iso')
+        if not os.path.exists(seed_iso):
+            user_data = """\
+#cloud-config
+hostname: {hostname}
+users:
+  - name: ze
+    sudo: ALL=(ALL) NOPASSWD:ALL
+    shell: /bin/bash
+    lock_passwd: false
+    plain_text_passwd: 'ze'
+chpasswd:
+  expire: false
+ssh_pwauth: true
+""".format(hostname=name)
+            meta_data = f"instance-id: {safe_name}\nlocal-hostname: {name}\n"
+            tmp = tempfile.mkdtemp()
+            try:
+                ud = os.path.join(tmp, 'user-data')
+                md = os.path.join(tmp, 'meta-data')
+                with open(ud, 'w') as f: f.write(user_data)
+                with open(md, 'w') as f: f.write(meta_data)
+                result = subprocess.run(
+                    ['cloud-localds', seed_iso, ud, md],
+                    capture_output=True, text=True
+                )
+                if result.returncode != 0:
+                    current_app.logger.warning(f'cloud-localds failed: {result.stderr.strip()}')
+                    seed_iso = None
+                else:
+                    resolved_disks.append(seed_iso)
+                    current_app.logger.info(f'Cloud-init seed ISO created: {seed_iso}')
+            finally:
+                shutil.rmtree(tmp, ignore_errors=True)
+
     # Define the VM ────────────────────────────────────────────────────────────
     try:
         xml_config = generate_vm_xml(name, ram, cpu, None, host_cpu, devices, disks=resolved_disks)
@@ -297,10 +343,16 @@ def create_vm():
         for p in overlays_created:
             try: os.remove(p)
             except OSError: pass
+        if seed_iso and os.path.exists(seed_iso):
+            try: os.remove(seed_iso)
+            except OSError: pass
         return jsonify({'error': str(e)}), 500
     except Exception:
         for p in overlays_created:
             try: os.remove(p)
+            except OSError: pass
+        if seed_iso and os.path.exists(seed_iso):
+            try: os.remove(seed_iso)
             except OSError: pass
         current_app.logger.exception("Unexpected error creating VM")
         return jsonify({'error': 'Failed to create VM'}), 500
