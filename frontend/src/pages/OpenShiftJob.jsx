@@ -1,17 +1,199 @@
-import { useState, useEffect, useCallback, useRef } from 'react'
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import {
   Boxes, ArrowLeft, CheckCircle, XCircle, Loader2,
   Terminal, Download, Copy, Check, ExternalLink, RefreshCw,
+  AlertTriangle, ChevronDown, ChevronRight,
+  KeyRound, Disc3, Server, Network, Cpu, Trophy, ShieldCheck,
 } from 'lucide-react'
 import api from '../api'
 
+// ── Deployment phase definitions ──────────────────────────────────────────────
+const STEPS = [
+  { id: 'auth',    label: 'Auth',        Icon: KeyRound,    min: 0,  max: 17  },
+  { id: 'iso',     label: 'ISO',         Icon: Disc3,       min: 18, max: 34  },
+  { id: 'vms',     label: 'VMs',         Icon: Server,      min: 35, max: 44  },
+  { id: 'nodes',   label: 'Nodes',       Icon: Network,     min: 45, max: 59  },
+  { id: 'install', label: 'Install',     Icon: Cpu,         min: 60, max: 97  },
+  { id: 'done',    label: 'Done',        Icon: Trophy,      min: 98, max: 101 },
+]
+
+// ── Log parsing helpers ───────────────────────────────────────────────────────
+function parseLogs(logs, config) {
+  const isSNO = config?.deployment_type === 'sno'
+  const configTotal = isSNO ? 1
+    : (parseInt(config?.control_plane_count || 3) + parseInt(config?.worker_count || 2))
+
+  let nodeRegistered = 0
+  let nodeTotal = configTotal || 0
+  let installPct = 0
+  let installStatus = ''
+  let installInfo = ''
+  let vmsCreated = 0
+  const warnings = []
+  const errors = []
+
+  for (const entry of logs) {
+    const msg = entry.msg || ''
+
+    // "  3/5 node(s) discovered"
+    const nm = msg.match(/(\d+)\/(\d+) node\(s\) (discovered|ready)/)
+    if (nm) {
+      nodeRegistered = parseInt(nm[1])
+      nodeTotal = parseInt(nm[2])
+    }
+
+    // "All 5 node(s) ready ✓"
+    const allReady = msg.match(/All (\d+) node\(s\) ready/)
+    if (allReady) {
+      nodeRegistered = parseInt(allReady[1])
+      nodeTotal = parseInt(allReady[1])
+    }
+
+    // "  Status: installing-in-progress (45%) — ..."
+    const im = msg.match(/Status:\s+(\S+)\s+\((\d+)%\)\s*(?:—\s*(.*))?/)
+    if (im) {
+      installStatus = im[1]
+      installPct = parseInt(im[2])
+      installInfo = (im[3] || '').trim()
+    }
+
+    // "VM xxx-master-0 started ... ✓"
+    if (/^VM \S+ started /.test(msg)) vmsCreated++
+
+    if (entry.level === 'warn')  warnings.push(entry)
+    if (entry.level === 'error') errors.push(entry)
+  }
+
+  return { nodeRegistered, nodeTotal, installPct, installStatus, installInfo, vmsCreated, warnings, errors }
+}
+
+// ── Sub-component: horizontal step timeline ───────────────────────────────────
+function StepTimeline({ progress, isComplete, isFailed }) {
+  return (
+    <div className="bg-navy-800 border border-navy-600 rounded-xl p-4">
+      <div className="flex items-center justify-between">
+        {STEPS.map((step, idx) => {
+          const done   = isComplete || progress > step.max
+          const active = !isComplete && !isFailed && progress >= step.min && progress <= step.max
+          const failed = isFailed && active
+          const pending = !done && !active && !failed
+
+          return (
+            <div key={step.id} className="flex items-center flex-1">
+              {/* Step circle */}
+              <div className="flex flex-col items-center gap-1 flex-shrink-0">
+                <div className={`w-8 h-8 rounded-full flex items-center justify-center transition-all ${
+                  failed  ? 'bg-red-500/20 border border-red-500/50' :
+                  done    ? 'bg-green-500/20 border border-green-500/50' :
+                  active  ? 'bg-sky-500/20 border border-sky-500/50' :
+                            'bg-navy-700 border border-navy-600'
+                }`}>
+                  {failed  ? <XCircle     size={14} className="text-red-400" /> :
+                   done    ? <CheckCircle size={14} className="text-green-400" /> :
+                   active  ? <Loader2     size={14} className="text-sky-400 animate-spin" /> :
+                             <step.Icon  size={14} className="text-slate-600" />}
+                </div>
+                <span className={`text-[10px] font-medium whitespace-nowrap ${
+                  failed  ? 'text-red-400' :
+                  done    ? 'text-green-400' :
+                  active  ? 'text-sky-300' :
+                            'text-slate-600'
+                }`}>{step.label}</span>
+              </div>
+              {/* Connector line (not after last) */}
+              {idx < STEPS.length - 1 && (
+                <div className={`flex-1 h-0.5 mx-1 rounded transition-all ${
+                  progress > step.max ? 'bg-green-500/40' : 'bg-navy-600'
+                }`} />
+              )}
+            </div>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
+// ── Sub-component: labeled progress bar ──────────────────────────────────────
+function ProgressBar({ label, value, max, color = 'sky', suffix, sublabel }) {
+  const pct = max > 0 ? Math.min(100, Math.round(value / max * 100)) : (value || 0)
+  const colorMap = {
+    sky:    'bg-sky-500',
+    green:  'bg-green-500',
+    purple: 'bg-purple-500',
+    amber:  'bg-amber-500',
+  }
+  return (
+    <div className="space-y-1.5">
+      <div className="flex items-center justify-between text-xs">
+        <span className="text-slate-400 font-medium">{label}</span>
+        <div className="flex items-center gap-2">
+          {sublabel && <span className="text-slate-500 text-[11px] font-mono">{sublabel}</span>}
+          <span className={`font-bold text-${color}-400`}>
+            {max > 0 ? `${value}/${max}` : `${pct}%`}{suffix}
+          </span>
+        </div>
+      </div>
+      <div className="w-full bg-navy-700 rounded-full h-2 overflow-hidden">
+        <div
+          className={`h-2 rounded-full transition-all duration-700 ${colorMap[color] || colorMap.sky}`}
+          style={{ width: `${pct}%` }}
+        />
+      </div>
+    </div>
+  )
+}
+
+// ── Sub-component: warnings panel ────────────────────────────────────────────
+function WarningsPanel({ warnings, errors }) {
+  const [open, setOpen] = useState(true)
+  const all = [...errors, ...warnings]
+  if (!all.length) return null
+
+  const hasErrors = errors.length > 0
+  return (
+    <div className={`border rounded-xl overflow-hidden ${
+      hasErrors ? 'border-red-500/40 bg-red-500/5' : 'border-amber-500/40 bg-amber-500/5'
+    }`}>
+      <button
+        onClick={() => setOpen(o => !o)}
+        className="w-full flex items-center gap-2.5 px-4 py-3 text-left"
+      >
+        <AlertTriangle size={14} className={hasErrors ? 'text-red-400' : 'text-amber-400'} />
+        <span className={`text-sm font-semibold ${hasErrors ? 'text-red-300' : 'text-amber-300'}`}>
+          {errors.length > 0 && `${errors.length} error${errors.length > 1 ? 's' : ''}`}
+          {errors.length > 0 && warnings.length > 0 && ', '}
+          {warnings.length > 0 && `${warnings.length} warning${warnings.length > 1 ? 's' : ''}`}
+        </span>
+        <div className="ml-auto">
+          {open ? <ChevronDown size={14} className="text-slate-500" /> : <ChevronRight size={14} className="text-slate-500" />}
+        </div>
+      </button>
+      {open && (
+        <div className="px-4 pb-3 space-y-1 max-h-48 overflow-y-auto">
+          {all.map((entry, i) => (
+            <div key={i} className={`flex gap-2 text-xs font-mono ${
+              entry.level === 'error' ? 'text-red-400' : 'text-amber-300'
+            }`}>
+              <span className="text-slate-600 flex-shrink-0">{entry.ts}</span>
+              <span className="break-all">{entry.msg}</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ── Main component ────────────────────────────────────────────────────────────
 export default function OpenShiftJob() {
   const { jobId }           = useParams()
   const navigate            = useNavigate()
   const [job, setJob]       = useState(null)
   const [copied, setCopied] = useState('')
   const [loading, setLoad]  = useState(true)
+  const [configOpen, setConfigOpen] = useState(false)
   const logRef              = useRef(null)
   const timerRef            = useRef(null)
 
@@ -50,6 +232,12 @@ export default function OpenShiftJob() {
     setTimeout(() => setCopied(''), 2000)
   }
 
+  // Parse log data for rich display
+  const parsed = useMemo(() => {
+    if (!job) return null
+    return parseLogs(job.logs || [], job.config)
+  }, [job?.logs?.length, job?.config])  // eslint-disable-line
+
   if (loading) {
     return (
       <div className="flex items-center justify-center py-24 text-slate-500 gap-2">
@@ -62,16 +250,34 @@ export default function OpenShiftJob() {
   const isComplete = job.status === 'complete'
   const isFailed   = job.status === 'failed'
   const isRunning  = !isComplete && !isFailed
+  const progress   = job.progress ?? 0
 
   const LOG_COLOR = { info: 'text-slate-300', warn: 'text-yellow-300', error: 'text-red-400' }
 
-  const borderColor = isComplete ? 'border-green-500/30' : isFailed ? 'border-red-500/30' : 'border-sky-500/30'
-  const bgColor     = isComplete ? 'bg-green-500/10'      : isFailed ? 'bg-red-500/10'      : 'bg-sky-500/10'
+  // ISO download: progress updates from 22→32 during download
+  const isDownloadingISO = isRunning && (job.phase || '').includes('Downloading')
+  const isoDownloadPct = isDownloadingISO ? Math.min(100, Math.round((progress - 22) / 10 * 100)) : null
+
+  // Node registration phase active or past
+  const showNodeBar = progress >= 45 && parsed?.nodeTotal > 0
+
+  // Installation phase active or past
+  const showInstallBar = progress >= 60 && parsed?.installPct > 0
+
+  // Total VMs expected
+  const isSNO = job.config?.deployment_type === 'sno'
+  const totalVMs = isSNO ? 1
+    : (parseInt(job.config?.control_plane_count || 3) + parseInt(job.config?.worker_count || 2))
+
+  // Status banner colours
+  const bannerBorder = isComplete ? 'border-green-500/30' : isFailed ? 'border-red-500/30' : 'border-sky-500/30'
+  const bannerBg     = isComplete ? 'bg-green-500/10'     : isFailed ? 'bg-red-500/10'     : 'bg-sky-500/10'
+  const progressColor = isComplete ? 'bg-green-500' : isFailed ? 'bg-red-500' : 'bg-gradient-to-r from-sky-500 to-blue-500'
 
   return (
-    <div className="max-w-3xl space-y-5">
+    <div className="max-w-4xl space-y-4">
 
-      {/* Back + header */}
+      {/* ── Back + header ────────────────────────────────────────────── */}
       <div className="flex items-center gap-3">
         <button onClick={() => navigate('/openshift')}
           className="p-2 rounded-md text-slate-400 hover:text-sky-400 hover:bg-navy-700 transition-colors">
@@ -80,82 +286,154 @@ export default function OpenShiftJob() {
         <div className="p-2.5 bg-red-500/10 rounded-xl">
           <Boxes size={18} className="text-red-400" />
         </div>
-        <div>
+        <div className="flex-1">
           <h1 className="text-slate-100 font-bold text-lg">
             {job.config?.cluster_name || job.id}
           </h1>
           <div className="flex items-center gap-3 text-xs text-slate-500">
             <span className={`font-mono px-1.5 py-0.5 rounded ${
-              job.config?.deployment_type === 'sno'
-                ? 'bg-purple-500/15 text-purple-300'
-                : 'bg-blue-500/15 text-blue-300'
+              isSNO ? 'bg-purple-500/15 text-purple-300' : 'bg-blue-500/15 text-blue-300'
             }`}>
-              {job.config?.deployment_type === 'sno' ? 'SNO' : 'Multi-node'}
+              {isSNO ? 'SNO' : `Multi-node (${totalVMs})`}
             </span>
             <span>OCP {job.config?.ocp_version}</span>
-            <span className="font-mono">{job.id}</span>
+            <span className="font-mono text-slate-600">{job.id}</span>
           </div>
+        </div>
+        {isFailed && (
+          <button onClick={() => navigate('/openshift/deploy')}
+            className="flex items-center gap-1.5 bg-sky-600 hover:bg-sky-500 text-white text-xs font-semibold px-3 py-1.5 rounded-md transition-colors">
+            <RefreshCw size={12} /> New Deployment
+          </button>
+        )}
+      </div>
+
+      {/* ── Status banner ────────────────────────────────────────────── */}
+      <div className={`flex items-center gap-4 bg-navy-800 border ${bannerBorder} rounded-xl p-4`}>
+        <div className={`p-3 rounded-xl flex-shrink-0 ${bannerBg}`}>
+          {isComplete ? <ShieldCheck size={22} className="text-green-400" />
+          : isFailed  ? <XCircle    size={22} className="text-red-400" />
+          :             <Loader2    size={22} className="text-sky-400 animate-spin" />}
+        </div>
+        <div className="flex-1 min-w-0">
+          <div className="text-slate-100 font-bold text-sm">{job.phase || 'Starting…'}</div>
+          <div className="text-slate-400 text-xs mt-0.5">
+            {isComplete ? 'Cluster is installed and ready!'
+            : isFailed  ? 'Deployment failed — check errors below.'
+            : isDownloadingISO ? `Downloading discovery ISO… ${isoDownloadPct ?? 0}%`
+            : showInstallBar && parsed?.installInfo ? parsed.installInfo
+            : 'Deployment in progress — this may take 45–90 minutes.'}
+          </div>
+        </div>
+        <div className="text-3xl font-bold text-sky-400 flex-shrink-0">{progress}%</div>
+      </div>
+
+      {/* ── Overall progress bar ─────────────────────────────────────── */}
+      <div className="space-y-1">
+        <div className="w-full bg-navy-700 rounded-full h-3 overflow-hidden">
+          <div className={`h-3 rounded-full transition-all duration-1000 ${progressColor}`}
+            style={{ width: `${progress}%` }} />
         </div>
       </div>
 
-      {/* Status card */}
-      <div className={`flex items-center gap-4 bg-navy-800 border ${borderColor} rounded-xl p-5`}>
-        <div className={`p-3 rounded-xl ${bgColor}`}>
-          {isComplete ? <CheckCircle size={24} className="text-green-400" />
-          : isFailed  ? <XCircle    size={24} className="text-red-400" />
-          :             <Loader2    size={24} className="text-sky-400 animate-spin" />}
-        </div>
-        <div className="flex-1">
-          <div className="text-slate-100 font-bold">{job.phase || 'Starting…'}</div>
-          <div className="text-slate-400 text-sm mt-0.5">
-            {isComplete ? 'OpenShift is installed and ready!'
-            : isFailed  ? 'Deployment failed — see logs below.'
-            :             'Deployment in progress — this may take 45–90 minutes.'}
-          </div>
-        </div>
-        <div className="flex flex-col items-end gap-2">
-          <div className="text-3xl font-bold text-sky-400">{job.progress ?? 0}%</div>
-          {isFailed && (
-            <button onClick={() => navigate('/openshift/deploy')}
-              className="flex items-center gap-1.5 bg-sky-600 hover:bg-sky-500 text-white text-xs font-semibold px-3 py-1.5 rounded-md transition-colors">
-              <RefreshCw size={12} /> New Deployment
-            </button>
+      {/* ── Phase timeline ───────────────────────────────────────────── */}
+      <StepTimeline progress={progress} isComplete={isComplete} isFailed={isFailed} />
+
+      {/* ── Sub-progress panels ──────────────────────────────────────── */}
+      {(isDownloadingISO || showNodeBar || showInstallBar || (parsed?.vmsCreated > 0 && progress < 45)) && (
+        <div className="bg-navy-800 border border-navy-600 rounded-xl p-4 space-y-4">
+
+          {/* ISO download bar */}
+          {isDownloadingISO && isoDownloadPct !== null && (
+            <ProgressBar
+              label="Discovery ISO Download"
+              value={isoDownloadPct}
+              color="purple"
+              sublabel="~100 MB"
+            />
           )}
-        </div>
-      </div>
 
-      {/* Progress bar */}
-      <div className="w-full bg-navy-700 rounded-full h-2">
-        <div className={`h-2 rounded-full transition-all duration-1000 ${
-          isComplete ? 'bg-green-500' : isFailed ? 'bg-red-500' : 'bg-sky-500'
-        }`} style={{ width: `${job.progress ?? 0}%` }} />
-      </div>
+          {/* VM creation progress */}
+          {parsed?.vmsCreated > 0 && progress < 45 && (
+            <ProgressBar
+              label="Virtual Machines Created"
+              value={parsed.vmsCreated}
+              max={totalVMs}
+              color="amber"
+            />
+          )}
 
-      {/* Cluster config summary */}
-      {job.config && (
-        <div className="bg-navy-800 border border-navy-600 rounded-xl overflow-hidden">
-          <div className="px-4 py-3 border-b border-navy-700 text-xs font-semibold text-slate-400 uppercase tracking-wider">
-            Configuration
-          </div>
-          <div className="grid grid-cols-2 gap-0">
-            {[
-              ['Cluster Name',  job.config.cluster_name],
-              ['Base Domain',   job.config.base_domain],
-              ['OCP Version',   job.config.ocp_version],
-              ['Type',          job.config.deployment_type === 'sno' ? 'Single Node (SNO)' : 'Multi-node'],
-              ['Network',       job.config.libvirt_network],
-              ['Machine CIDR',  job.config.machine_cidr],
-            ].map(([k, v]) => v ? (
-              <div key={k} className="px-4 py-2.5 border-b border-navy-700/50 flex gap-3">
-                <span className="text-slate-500 text-xs w-28 flex-shrink-0">{k}</span>
-                <span className="text-slate-200 text-xs font-mono">{v}</span>
-              </div>
-            ) : null)}
-          </div>
+          {/* Node registration bar */}
+          {showNodeBar && (
+            <ProgressBar
+              label="Node Registration"
+              value={parsed.nodeRegistered}
+              max={parsed.nodeTotal}
+              color={parsed.nodeRegistered >= parsed.nodeTotal ? 'green' : 'sky'}
+              sublabel={parsed.nodeRegistered >= parsed.nodeTotal ? 'All registered ✓' : 'Waiting for nodes to boot…'}
+            />
+          )}
+
+          {/* Installation progress bar */}
+          {showInstallBar && (
+            <ProgressBar
+              label="OpenShift Installation"
+              value={parsed.installPct}
+              color={parsed.installStatus === 'installed' ? 'green' : 'sky'}
+              sublabel={parsed.installStatus
+                ? parsed.installStatus.replace(/-/g, ' ')
+                : 'preparing…'}
+            />
+          )}
         </div>
       )}
 
-      {/* Logs */}
+      {/* ── Warnings / errors panel ──────────────────────────────────── */}
+      {parsed && (parsed.warnings.length > 0 || parsed.errors.length > 0) && (
+        <WarningsPanel warnings={parsed.warnings} errors={parsed.errors} />
+      )}
+
+      {/* ── Configuration (collapsible) ───────────────────────────────── */}
+      {job.config && (
+        <div className="bg-navy-800 border border-navy-600 rounded-xl overflow-hidden">
+          <button
+            onClick={() => setConfigOpen(o => !o)}
+            className="w-full flex items-center gap-2 px-4 py-3 border-b border-navy-700 text-left hover:bg-navy-700/30 transition-colors"
+          >
+            {configOpen
+              ? <ChevronDown  size={13} className="text-slate-500" />
+              : <ChevronRight size={13} className="text-slate-500" />}
+            <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider">
+              Configuration
+            </span>
+          </button>
+          {configOpen && (
+            <div className="grid grid-cols-2 gap-0">
+              {[
+                ['Cluster Name',     job.config.cluster_name],
+                ['Base Domain',      job.config.base_domain],
+                ['OCP Version',      job.config.ocp_version],
+                ['Type',             isSNO ? 'Single Node (SNO)' : `Multi-node (${job.config.control_plane_count}CP + ${job.config.worker_count}W)`],
+                ['Network',          job.config.libvirt_network],
+                ['Machine CIDR',     job.config.machine_cidr],
+                ['Cluster CIDR',     job.config.cluster_cidr],
+                ['Service CIDR',     job.config.service_cidr],
+                ['Storage Path',     job.config.storage_path],
+                ['Static IP',        job.config.static_ip_enabled ? 'Enabled' : null],
+                ['API VIP',          job.config.api_vip],
+                ['Ingress VIP',      job.config.ingress_vip],
+              ].map(([k, v]) => v ? (
+                <div key={k} className="px-4 py-2.5 border-b border-navy-700/50 flex gap-3">
+                  <span className="text-slate-500 text-xs w-28 flex-shrink-0">{k}</span>
+                  <span className="text-slate-200 text-xs font-mono">{v}</span>
+                </div>
+              ) : null)}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ── Deployment log ────────────────────────────────────────────── */}
       <div className="bg-navy-900 border border-navy-600 rounded-xl overflow-hidden">
         <div className="px-4 py-3 border-b border-navy-700 flex items-center gap-2">
           <Terminal size={13} className="text-sky-400" />
@@ -175,7 +453,7 @@ export default function OpenShiftJob() {
         </div>
       </div>
 
-      {/* Results */}
+      {/* ── Results (complete) ───────────────────────────────────────── */}
       {isComplete && job.result && (
         <div className="bg-green-900/10 border border-green-700/40 rounded-xl p-5 space-y-4">
           <h3 className="text-green-400 font-semibold text-sm flex items-center gap-2">
