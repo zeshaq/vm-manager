@@ -1045,6 +1045,24 @@ def _run_deploy(job_id: str, cfg: dict):
         log(f'Waiting for {total_nodes} node(s) to boot and register…')
         deadline = time.time() + 45 * 60   # 45 min timeout
         registered = []
+        _vm_cpu_prev: dict = {}   # vm_name → last seen cpu_time_ns
+
+        def _qemu_log_tail(vm_name: str, lines: int = 10) -> list:
+            """Return last N error/warning lines from the QEMU log for this VM."""
+            log_path = Path(f'/var/log/libvirt/qemu/{vm_name}.log')
+            if not log_path.exists():
+                return []
+            try:
+                text = log_path.read_text(errors='replace')
+                matches = []
+                for line in text.splitlines():
+                    lower = line.lower()
+                    if any(kw in lower for kw in ('error', 'warn', 'fail', 'killed', 'oom',
+                                                   'out of memory', 'segfault', 'panic')):
+                        matches.append(line.strip())
+                return matches[-lines:] if matches else text.strip().splitlines()[-lines:]
+            except Exception:
+                return []
 
         while time.time() < deadline:
             try:
@@ -1057,12 +1075,11 @@ def _run_deploy(job_id: str, cfg: dict):
                 log(f'  {known_count}/{total_nodes} node(s) discovered')
                 _job_set(job_id, progress=45 + min(known_count, total_nodes) * 3)
 
-                # Log which VMs haven't shown up yet
+                # Diagnose VMs that haven't registered yet
                 if known_count < total_nodes:
                     registered_names = {h.get('requested_hostname', '') for h in registered}
                     missing = [n for n in vm_names if not any(n in rn for rn in registered_names)]
                     if missing:
-                        # Check libvirt state so we know if they crashed vs. still booting
                         try:
                             lv = libvirt.open('qemu:///system')
                             for vm in missing:
@@ -1071,17 +1088,48 @@ def _run_deploy(job_id: str, cfg: dict):
                                     state_map = {0: 'nostate', 1: 'running', 2: 'blocked',
                                                  3: 'paused', 4: 'shutdown', 5: 'shutoff', 6: 'crashed'}
                                     st = state_map.get(d.state()[0], 'unknown')
-                                    if st not in ('running',):
-                                        log(f'  WARNING: {vm} is {st} — attempting restart', 'warn')
+
+                                    if st not in ('running', 'blocked'):
+                                        # VM is not running — log QEMU errors and restart
+                                        log(f'  ⚠ {vm} is {st} — checking logs…', 'warn')
+                                        for err_line in _qemu_log_tail(vm):
+                                            log(f'    QEMU: {err_line}', 'warn')
+                                        log(f'  ↺ Restarting {vm}…', 'warn')
                                         try:
                                             if d.isActive(): d.destroy()
                                             d.create()
-                                        except Exception:
-                                            pass
+                                            log(f'  {vm} restarted ✓')
+                                        except Exception as re:
+                                            log(f'  {vm} restart failed: {re}', 'warn')
                                     else:
-                                        log(f'  {vm}: running, still booting…')
+                                        # VM is running — check if CPU time is growing
+                                        try:
+                                            cpu_ns = d.getCPUStats(True)[0].get('cpu_time', 0)
+                                            prev   = _vm_cpu_prev.get(vm, 0)
+                                            _vm_cpu_prev[vm] = cpu_ns
+                                            cpu_s  = cpu_ns / 1e9
+
+                                            if prev > 0 and (cpu_ns - prev) < 1e8:   # <0.1s growth
+                                                # Frozen — not making progress
+                                                log(f'  ⚠ {vm}: running but CPU frozen ({cpu_s:.1f}s) — checking logs…', 'warn')
+                                                for err_line in _qemu_log_tail(vm):
+                                                    log(f'    QEMU: {err_line}', 'warn')
+                                                log(f'  ↺ Restarting frozen VM {vm}…', 'warn')
+                                                try:
+                                                    d.destroy()
+                                                    d.create()
+                                                    _vm_cpu_prev[vm] = 0
+                                                    log(f'  {vm} restarted ✓')
+                                                except Exception as re:
+                                                    log(f'  {vm} restart failed: {re}', 'warn')
+                                            else:
+                                                log(f'  {vm}: running ({cpu_s:.1f}s CPU), still booting…')
+                                        except Exception:
+                                            log(f'  {vm}: running, still booting…')
                                 except libvirt.libvirtError:
-                                    log(f'  {vm}: not found in libvirt', 'warn')
+                                    log(f'  ⚠ {vm}: not found in libvirt', 'warn')
+                                    for err_line in _qemu_log_tail(vm):
+                                        log(f'    QEMU: {err_line}', 'warn')
                             lv.close()
                         except Exception:
                             pass
