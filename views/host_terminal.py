@@ -76,10 +76,10 @@ def host_ws():
                 if isinstance(data, str):
                     try:
                         msg = json.loads(data)
-                        if msg.get('type') == 'resize':
+                        if isinstance(msg, dict) and msg.get('type') == 'resize':
                             _set_pty_size(fd, int(msg.get('cols', 80)), int(msg.get('rows', 24)))
                             continue
-                    except (ValueError, KeyError):
+                    except (ValueError, KeyError, TypeError):
                         pass
                     os.write(fd, data.encode())
                 else:
