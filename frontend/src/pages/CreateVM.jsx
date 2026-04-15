@@ -5,9 +5,11 @@ import api from '../api'
 
 export default function CreateVM() {
   const navigate = useNavigate()
+  const RAM_OPTIONS = [2, 4, 8, 16, 32, 64, 128]
+
   const [form, setForm] = useState({
     name:     '',
-    ram:      '2048',
+    ram:      8192,
     cpu:      '2',
     host_cpu: true,
   })
@@ -23,7 +25,7 @@ export default function CreateVM() {
     try {
       const res = await api.post('/vms', {
         name:     form.name,
-        ram:      parseInt(form.ram),
+        ram:      form.ram,
         cpu:      parseInt(form.cpu),
         host_cpu: form.host_cpu,
         disks:    [],
@@ -67,39 +69,43 @@ export default function CreateVM() {
             />
           </div>
 
-          {/* RAM and CPU */}
-          <div className="grid grid-cols-2 gap-6">
-            <div>
-              <label className="block text-sm font-medium text-slate-300 mb-1.5">
-                RAM (MB) <span className="text-red-400">*</span>
-              </label>
-              <input
-                type="number"
-                value={form.ram}
-                onChange={e => set('ram', e.target.value)}
-                min="256"
-                step="256"
-                className="w-full bg-navy-800 border border-navy-400 text-slate-200 focus:border-sky-500 focus:outline-none rounded-md px-3 py-2.5"
-                required
-              />
-              <p className="text-slate-500 text-xs mt-1">
-                {Math.round(form.ram / 1024 * 10) / 10} GB
-              </p>
+          {/* RAM */}
+          <div>
+            <label className="block text-sm font-medium text-slate-300 mb-2">
+              RAM <span className="text-red-400">*</span>
+            </label>
+            <div className="flex gap-2 flex-wrap">
+              {RAM_OPTIONS.map(gb => (
+                <button
+                  key={gb}
+                  type="button"
+                  onClick={() => set('ram', gb * 1024)}
+                  className={`px-4 py-2 rounded-md text-sm font-medium transition-colors ${
+                    form.ram === gb * 1024
+                      ? 'bg-sky-500 text-white'
+                      : 'bg-navy-800 border border-navy-400 text-slate-300 hover:border-sky-500 hover:text-sky-400'
+                  }`}
+                >
+                  {gb} GB
+                </button>
+              ))}
             </div>
-            <div>
-              <label className="block text-sm font-medium text-slate-300 mb-1.5">
-                vCPUs <span className="text-red-400">*</span>
-              </label>
-              <input
-                type="number"
-                value={form.cpu}
-                onChange={e => set('cpu', e.target.value)}
-                min="1"
-                max="256"
-                className="w-full bg-navy-800 border border-navy-400 text-slate-200 focus:border-sky-500 focus:outline-none rounded-md px-3 py-2.5"
-                required
-              />
-            </div>
+          </div>
+
+          {/* CPU */}
+          <div>
+            <label className="block text-sm font-medium text-slate-300 mb-1.5">
+              vCPUs <span className="text-red-400">*</span>
+            </label>
+            <input
+              type="number"
+              value={form.cpu}
+              onChange={e => set('cpu', e.target.value)}
+              min="1"
+              max="256"
+              className="w-full bg-navy-800 border border-navy-400 text-slate-200 focus:border-sky-500 focus:outline-none rounded-md px-3 py-2.5"
+              required
+            />
           </div>
 
           {/* Host CPU passthrough */}
