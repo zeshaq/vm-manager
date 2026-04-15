@@ -73,6 +73,28 @@ def vm_console_ws():
 
     current_app.logger.info(f"VM console opened for {vm_name} by {session['username']}")
 
+    # Check if VM has a serial/console device; add one if missing
+    try:
+        conn = libvirt.open('qemu:///system')
+        dom = conn.lookupByName(vm_name)
+        tree = ET.fromstring(dom.XMLDesc(libvirt.VIR_DOMAIN_XML_INACTIVE))
+        has_console = (tree.find('devices/console') is not None or
+                       tree.find('devices/serial') is not None)
+        if not has_console:
+            devices = tree.find('devices')
+            serial_el = ET.SubElement(devices, 'serial', {'type': 'pty'})
+            ET.SubElement(serial_el, 'target', {'port': '0'})
+            console_el = ET.SubElement(devices, 'console', {'type': 'pty'})
+            ET.SubElement(console_el, 'target', {'type': 'serial', 'port': '0'})
+            conn.defineXML(ET.tostring(tree).decode())
+            ws.send('\r\n\x1b[33mSerial console device added to this VM.\x1b[0m\r\n')
+            ws.send('\x1b[33mRestart the VM once for the console to become active.\x1b[0m\r\n\r\n')
+        conn.close()
+    except libvirt.libvirtError as e:
+        ws.send(f'\r\n\x1b[31mError: {e}\x1b[0m\r\n')
+        ws.close()
+        return ''
+
     pid, fd = pty.fork()
     if pid == 0:
         os.execvp('virsh', ['virsh', '-c', 'qemu:///system', 'console', vm_name])
