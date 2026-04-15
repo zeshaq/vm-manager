@@ -191,7 +191,7 @@ export default function VMList() {
                         <Eye size={13} />
                       </Link>
                       {vm.state_code === 1 && (
-                        <a href={`/vnc/${vm.uuid}`} target="_blank" rel="noopener noreferrer"
+                        <a href={`/vnc-view/${vm.uuid}`} target="_blank" rel="noopener noreferrer"
                           title="VNC Console"
                           className="p-1.5 rounded bg-sky-900/60 hover:bg-sky-800 text-sky-400 transition-colors">
                           <Monitor size={13} />

@@ -50,6 +50,25 @@ def _get_vnc_port(vm_uuid: str):
         conn.close()
 
 
+@console_bp.route('/vnc-view/<vm_uuid>')
+def vnc_view(vm_uuid):
+    """Render the noVNC page for a VM identified by UUID."""
+    from flask import render_template
+    if 'username' not in session:
+        return 'Unauthorized', 401
+    if not _LIBVIRT:
+        return 'libvirt not available', 500
+    conn = _libvirt.open('qemu:///system')
+    try:
+        dom = conn.lookupByUUIDString(vm_uuid)
+        vm_name = dom.name()
+    except _libvirt.libvirtError:
+        return 'VM not found', 404
+    finally:
+        conn.close()
+    return render_template('novnc.html', vm_name=vm_name)
+
+
 @console_bp.route('/api/console/<vm_uuid>/info')
 def vnc_info(vm_uuid):
     err = _auth()

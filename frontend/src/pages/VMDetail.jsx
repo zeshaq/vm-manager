@@ -260,7 +260,7 @@ export default function VMDetail() {
               className="flex items-center gap-2 bg-navy-500 hover:bg-navy-400 border border-navy-300 text-slate-300 px-3 py-2 rounded-md text-sm">
               <Terminal size={14} /> Console
             </a>
-            <a href={`/vnc/${uuid}`} target="_blank" rel="noopener noreferrer"
+            <a href={`/vnc-view/${uuid}`} target="_blank" rel="noopener noreferrer"
               className="flex items-center gap-2 bg-sky-700 hover:bg-sky-600 border border-sky-500 text-white px-3 py-2 rounded-md text-sm">
               <Monitor size={14} /> VNC
             </a>
