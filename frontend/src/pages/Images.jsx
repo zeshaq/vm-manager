@@ -90,8 +90,7 @@ function prepareScript(image) {
   --run-command 'touch /etc/cloud/cloud-init.disabled' \\
   --run-command 'mkdir -p /etc/netplan && printf "network:\\n  version: 2\\n  ethernets:\\n    all-en:\\n      match:\\n        name: \\"en*\\"\\n      dhcp4: true\\n    all-eth:\\n      match:\\n        name: \\"eth*\\"\\n      dhcp4: true\\n" > /etc/netplan/99-dhcp.yaml && chmod 600 /etc/netplan/99-dhcp.yaml' \\
   --run-command 'ln -sf /run/systemd/resolve/stub-resolv.conf /etc/resolv.conf' \\
-  --install qemu-guest-agent \\
-  --run-command 'systemctl enable qemu-guest-agent' \\
+  --run-command 'systemctl enable qemu-guest-agent 2>/dev/null || true' \\
   --run-command 'systemctl enable ssh 2>/dev/null || systemctl enable sshd 2>/dev/null || true' \\
   --run-command 'rm -f /etc/ssh/ssh_host_*' \\
   --selinux-relabel`

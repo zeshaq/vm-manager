@@ -601,8 +601,7 @@ Warning: if the config is invalid or changes the IP, you may lose remote access.
   --run-command 'touch /etc/cloud/cloud-init.disabled' \\
   --run-command 'mkdir -p /etc/netplan && printf "network:\\n  version: 2\\n  ethernets:\\n    all-en:\\n      match:\\n        name: \\"en*\\"\\n      dhcp4: true\\n    all-eth:\\n      match:\\n        name: \\"eth*\\"\\n      dhcp4: true\\n" > /etc/netplan/99-dhcp.yaml && chmod 600 /etc/netplan/99-dhcp.yaml' \\
   --run-command 'ln -sf /run/systemd/resolve/stub-resolv.conf /etc/resolv.conf' \\
-  --install qemu-guest-agent \\
-  --run-command 'systemctl enable qemu-guest-agent' \\
+  --run-command 'systemctl enable qemu-guest-agent 2>/dev/null || true' \\
   --run-command 'systemctl enable ssh 2>/dev/null || systemctl enable sshd 2>/dev/null || true' \\
   --run-command 'rm -f /etc/ssh/ssh_host_*' \\
   --selinux-relabel`}function Hj({image:e,onDeleted:t}){const[r,n]=A.useState(!1),[a,i]=A.useState(!0),[s,o]=A.useState(!1),[u,c]=A.useState(!1),[f,d]=A.useState(!1),[h,v]=A.useState(""),[g,y]=A.useState(!1),[p,m]=A.useState([]),[x,b]=A.useState(null),_=A.useRef(null),w=()=>{v(Yle(e)),m([]),b(null),d(!0)},k=()=>{y(!0),m([]),b(null),new EventSource(`/api/images/${e.id}/run-script-stream`).close(),fetch(`/api/images/${e.id}/run-script`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({script:h}),credentials:"same-origin"}).then(async T=>{if(!T.ok||T.headers.get("content-type")?.includes("application/json")){const B=await T.json().catch(()=>({}));m([B.error||`HTTP ${T.status}`]),b("error"),y(!1);return}const R=T.body.getReader(),D=new TextDecoder;let K="";for(;;){const{done:B,value:U}=await R.read();if(B)break;K+=D.decode(U,{stream:!0});const O=K.split(`
