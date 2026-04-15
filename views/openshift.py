@@ -1169,6 +1169,32 @@ def _run_deploy(job_id: str, cfg: dict):
         # ── Step 6: Wait for host discovery ──────────────────────────────────
         phase('Waiting for nodes to register', 45)
         log(f'Waiting for {total_nodes} node(s) to boot and register…')
+
+        # Fast-forward: if the cluster is already past the "ready" state (i.e. a
+        # previous run triggered installation before this thread was killed), skip
+        # node-waiting and jump straight to installation monitoring.
+        try:
+            _fc_token = _get_access_token(cfg['offline_token'])
+            _fc_r = _ai('GET', f'/clusters/{cluster_id}', _fc_token)
+            _fc_status = _fc_r.json().get('status', '')
+            _PAST_READY = {'preparing-for-installation', 'installing', 'installing-in-progress',
+                           'installing-pending-user-action', 'finalizing', 'installed'}
+            if _fc_status in _PAST_READY:
+                log(f'Resuming: cluster already in "{_fc_status}" — skipping node wait, jumping to install monitor')
+                phase('Installing OpenShift', 65)
+                if 'pending-user-action' in _fc_status:
+                    log('  ⚠ Nodes pending user action — ejecting ISO and rebooting…', 'warn')
+                    _eject_cdroms(vm_names, log)
+                    time.sleep(2)
+                    _reboot_vms(vm_names, log)
+                _monitor_install_thread(job_id, cfg, cluster_id)
+                return
+            elif _fc_status == 'error':
+                fail(f'Cluster is in error state: {_fc_r.json().get("status_info", "")}')
+                return
+        except Exception as _fc_e:
+            log(f'  Cluster status pre-check failed ({_fc_e}), proceeding with node wait…', 'warn')
+
         deadline = time.time() + 45 * 60   # 45 min timeout
         registered = []
         _vm_cpu_prev: dict = {}   # vm_name → last seen cpu_time_ns
