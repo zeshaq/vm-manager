@@ -736,6 +736,15 @@ def attach_cloud_image(uuid):
         # 2. cloud-init seed ISO
         import tempfile, shutil
         seed_iso = os.path.join(STORAGE_PATH, f'{safe_name}-seed.iso')
+
+        # Generate a proper SHA-512 password hash so the password is permanent
+        # and never expires regardless of cloud-init version.
+        pw_result = subprocess.run(
+            ['openssl', 'passwd', '-6', 'ze'],
+            capture_output=True, text=True, check=True
+        )
+        passwd_hash = pw_result.stdout.strip()
+
         user_data = f"""\
 #cloud-config
 hostname: {vm_name}
@@ -744,7 +753,7 @@ users:
     sudo: ALL=(ALL) NOPASSWD:ALL
     shell: /bin/bash
     lock_passwd: false
-    plain_text_passwd: 'ze'
+    passwd: {passwd_hash}
 chpasswd:
   expire: false
 ssh_pwauth: true
