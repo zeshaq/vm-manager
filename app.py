@@ -4,6 +4,30 @@ import psutil
 import libvirt
 from datetime import timedelta
 
+
+class _WebSocketWSGIFix:
+    """Strip WebSocket upgrade headers so Werkzeug 3.x does not change the
+    URL scheme to 'ws' and fail to match regular Flask routes.
+
+    geventwebsocket handles the WS upgrade before calling the WSGI app, so by
+    the time Flask is invoked the headers are stale and harmful.  We remove
+    them only when a live WebSocket object is already present in environ.
+    """
+    def __init__(self, wsgi_app):
+        self._app = wsgi_app
+
+    def __call__(self, environ, start_response):
+        if environ.get('wsgi.websocket') is not None:
+            environ = dict(environ)
+            environ.pop('HTTP_UPGRADE', None)
+            conn = environ.get('HTTP_CONNECTION', '')
+            conn = ','.join(
+                v for v in conn.split(',') if v.strip().lower() != 'upgrade'
+            )
+            environ['HTTP_CONNECTION'] = conn
+        return self._app(environ, start_response)
+
+
 # Import the blueprints
 from views.listing import listing_bp
 from views.creation import creation_bp
@@ -22,8 +46,6 @@ from views.images import images_bp
 from views.console import console_bp
 from views.system_mgmt import system_bp
 from views.openshift import ocp_bp
-
-from sockets import sock
 
 app = Flask(__name__, static_folder='frontend/dist/assets', static_url_path='/assets')
 
@@ -48,7 +70,6 @@ app.config.update(
     MAX_CONTENT_LENGTH=500 * 1024 * 1024,  # 500 MB upload limit
 )
 
-sock.init_app(app)
 limiter.init_app(app)
 
 # ── Security response headers ─────────────────────────────────────────────
@@ -79,6 +100,10 @@ app.register_blueprint(images_bp)
 app.register_blueprint(console_bp)
 app.register_blueprint(system_bp)
 app.register_blueprint(ocp_bp)
+
+# Apply WebSocket fix AFTER blueprint registration so it wraps the fully
+# configured Flask app.
+app.wsgi_app = _WebSocketWSGIFix(app.wsgi_app)
 
 @app.route('/login')
 @app.route('/logout')

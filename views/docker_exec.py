@@ -2,20 +2,21 @@ import os
 import re
 import pty
 import select
-from threading import Thread
+import gevent
 from flask import Blueprint, render_template, session, request, current_app
-from flask_sock import ConnectionClosed
-from sockets import sock
+
+try:
+    from geventwebsocket.exceptions import WebSocketError
+except ImportError:
+    WebSocketError = Exception
 
 docker_exec_bp = Blueprint('docker_exec', __name__)
 
-# Only allow safe container IDs / names
 _CTR_RE = re.compile(r'^[a-zA-Z0-9][a-zA-Z0-9_.\-]{0,127}$')
 
 
 @docker_exec_bp.route('/docker-exec')
 def docker_exec_page():
-    """Serve the xterm.js-based exec terminal page."""
     container_id = request.args.get('container_id', '')
     container_name = request.args.get('name', container_id)
     if not container_id or not _CTR_RE.match(container_id):
@@ -25,27 +26,26 @@ def docker_exec_page():
                            container_name=container_name)
 
 
-@sock.route('/docker-exec-ws')
-def docker_exec_ws(ws):
-    """WebSocket proxy: browser ↔ docker exec shell."""
+@docker_exec_bp.route('/docker-exec-ws')
+def docker_exec_ws():
+    ws = request.environ.get('wsgi.websocket')
+    if not ws:
+        return 'WebSocket required', 400
+
     if 'username' not in session:
-        ws.close(reason=1008, message="Unauthorized")
-        return
+        ws.close()
+        return ''
 
     container_id = request.args.get('container_id', '')
     if not container_id or not _CTR_RE.match(container_id):
-        ws.close(reason=1008, message="Invalid container_id")
-        return
+        ws.close()
+        return ''
 
-    current_app.logger.info(
-        f"Docker exec opened for {container_id} by {session['username']}"
-    )
+    current_app.logger.info(f"Docker exec opened for {container_id} by {session['username']}")
 
-    # Try bash, fall back to sh
     pid, fd = pty.fork()
     if pid == 0:
         os.execvp('docker', ['docker', 'exec', '-it', container_id, '/bin/bash'])
-        # If bash not found, try sh
         os.execvp('docker', ['docker', 'exec', '-it', container_id, '/bin/sh'])
         os._exit(1)
 
@@ -58,13 +58,11 @@ def docker_exec_ws(ws):
                     if not data:
                         break
                     ws.send(data.decode(errors='replace'))
-        except (ConnectionClosed, OSError):
+        except (WebSocketError, OSError):
             pass
         finally:
-            try:
-                ws.close()
-            except Exception:
-                pass
+            try: ws.close()
+            except Exception: pass
 
     def ws_to_pty():
         try:
@@ -76,21 +74,16 @@ def docker_exec_ws(ws):
                     os.write(fd, data.encode())
                 else:
                     os.write(fd, data)
-        except (ConnectionClosed, OSError):
+        except (WebSocketError, OSError):
             pass
 
-    t1 = Thread(target=pty_to_ws, daemon=True)
-    t2 = Thread(target=ws_to_pty, daemon=True)
-    t1.start()
-    t2.start()
-    t1.join()
-    t2.join()
+    g1 = gevent.spawn(pty_to_ws)
+    g2 = gevent.spawn(ws_to_pty)
+    gevent.joinall([g1, g2])
 
-    try:
-        os.close(fd)
-    except OSError:
-        pass
-    try:
-        os.waitpid(pid, 0)
-    except OSError:
-        pass
+    try: os.close(fd)
+    except OSError: pass
+    try: os.waitpid(pid, 0)
+    except OSError: pass
+
+    return ''

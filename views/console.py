@@ -1,12 +1,8 @@
 """
-noVNC WebSocket proxy.
+noVNC WebSocket proxy — geventwebsocket edition.
 
-Flow:
-  Browser (noVNC JS)  ←WebSocket→  /ws/vnc/<uuid>  ←TCP→  VM VNC server
-
-libvirt assigns each VM a VNC port (5900+display).  We read it from
-the running domain's XML and proxy raw bytes in both directions using
-gevent greenlets so the single worker thread is never blocked.
+With GeventWebSocketWorker, WebSocket upgrades are handled by the worker
+before the WSGI app runs. The WebSocket object is in environ['wsgi.websocket'].
 """
 
 import socket as _socket
@@ -19,7 +15,12 @@ try:
 except ImportError:
     _LIBVIRT = False
 
-from sockets import sock
+try:
+    from geventwebsocket.exceptions import WebSocketError
+    import gevent
+except ImportError:
+    WebSocketError = Exception
+    gevent = None
 
 console_bp = Blueprint('console', __name__)
 
@@ -30,14 +31,14 @@ def _auth():
     return None
 
 
-def _get_vnc_port(vm_uuid: str) -> int | None:
+def _get_vnc_port(vm_uuid: str):
     """Return the live VNC TCP port for a running VM, or None."""
     if not _LIBVIRT:
         return None
     conn = _libvirt.open('qemu:///system')
     try:
         dom  = conn.lookupByUUIDString(vm_uuid)
-        xml  = dom.XMLDesc()          # live XML — includes actual port
+        xml  = dom.XMLDesc()
         root = ET.fromstring(xml)
         g    = root.find('.//graphics[@type="vnc"]')
         if g is not None:
@@ -49,8 +50,6 @@ def _get_vnc_port(vm_uuid: str) -> int | None:
         conn.close()
 
 
-# ── REST: VNC info ────────────────────────────────────────────────────────────
-
 @console_bp.route('/api/console/<vm_uuid>/info')
 def vnc_info(vm_uuid):
     err = _auth()
@@ -58,33 +57,34 @@ def vnc_info(vm_uuid):
         return err
     port = _get_vnc_port(vm_uuid)
     if port is None:
-        return jsonify({'error': 'VNC not available — VM may be stopped or VNC not configured'}), 404
+        return jsonify({'error': 'VNC not available'}), 404
     return jsonify({'vnc_port': port, 'ws_path': f'/ws/vnc/{vm_uuid}'})
 
 
-# ── WebSocket proxy ───────────────────────────────────────────────────────────
-
-@sock.route('/ws/vnc/<vm_uuid>')
-def vnc_proxy(ws, vm_uuid):
+@console_bp.route('/ws/vnc/<vm_uuid>')
+def vnc_proxy(vm_uuid):
     """Bidirectional WebSocket ↔ TCP proxy to the VM's VNC port."""
-    # Session auth — flask session is available inside flask-sock handlers
+    ws = request.environ.get('wsgi.websocket')
+    if not ws:
+        return 'WebSocket required', 400
+
     if 'username' not in session:
-        ws.close(1008, 'Unauthorized')
-        return
+        ws.close()
+        return ''
 
     port = _get_vnc_port(vm_uuid)
     if port is None:
-        ws.close(1011, 'VNC unavailable')
-        return
+        ws.close()
+        return ''
 
     try:
         vnc = _socket.socket(_socket.AF_INET, _socket.SOCK_STREAM)
+        vnc.settimeout(10)
         vnc.connect(('127.0.0.1', port))
-    except OSError as e:
-        ws.close(1011, str(e))
-        return
-
-    import gevent
+        vnc.settimeout(None)
+    except OSError:
+        ws.close()
+        return ''
 
     def _ws_to_vnc():
         try:
@@ -95,10 +95,11 @@ def vnc_proxy(ws, vm_uuid):
                 if isinstance(data, str):
                     data = data.encode('latin-1')
                 vnc.sendall(data)
-        except Exception:
+        except (WebSocketError, OSError):
             pass
         finally:
-            vnc.close()
+            try: vnc.close()
+            except Exception: pass
 
     def _vnc_to_ws():
         try:
@@ -107,9 +108,18 @@ def vnc_proxy(ws, vm_uuid):
                 if not chunk:
                     break
                 ws.send(chunk)
-        except Exception:
+        except (WebSocketError, OSError):
             pass
 
-    g1 = gevent.spawn(_ws_to_vnc)
-    g2 = gevent.spawn(_vnc_to_ws)
-    gevent.joinall([g1, g2])
+    if gevent:
+        g1 = gevent.spawn(_ws_to_vnc)
+        g2 = gevent.spawn(_vnc_to_ws)
+        gevent.joinall([g1, g2])
+    else:
+        from threading import Thread
+        t1 = Thread(target=_ws_to_vnc, daemon=True)
+        t2 = Thread(target=_vnc_to_ws, daemon=True)
+        t1.start(); t2.start()
+        t1.join(); t2.join()
+
+    return ''
