@@ -5,7 +5,7 @@ import {
   Terminal, Download, Copy, Check, ExternalLink, RefreshCw,
   AlertTriangle, ChevronDown, ChevronRight,
   KeyRound, Disc3, Server, Network, Cpu, Trophy, ShieldCheck,
-  Upload, X, Search, ChevronsDown, Maximize2, Minimize2,
+  Upload, X, Search, ChevronsDown, Maximize2, Minimize2, RotateCcw,
 } from 'lucide-react'
 import api from '../api'
 
@@ -497,6 +497,71 @@ function SyncModal({ jobId, onClose, onSynced }) {
   )
 }
 
+// ── Reset confirmation modal ──────────────────────────────────────────────────
+function ResetModal({ jobId, clusterName, onClose, onReset }) {
+  const [busy,  setBusy]  = useState(false)
+  const [error, setError] = useState('')
+
+  const confirm = async () => {
+    setBusy(true)
+    setError('')
+    try {
+      await api.post(`/openshift/jobs/${jobId}/reset`, {})
+      onReset()
+    } catch (e) {
+      const msg = e.response?.data?.error
+      if (msg === 'no_stored_credentials') {
+        onClose('need_creds')
+      } else {
+        setError(msg || 'Reset failed')
+        setBusy(false)
+      }
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
+      <div className="bg-navy-800 border border-navy-600 rounded-xl w-full max-w-sm shadow-2xl">
+        <div className="flex items-center gap-3 px-5 py-4 border-b border-navy-700">
+          <RotateCcw size={16} className="text-orange-400" />
+          <span className="text-slate-100 font-semibold text-sm">Reset Cluster</span>
+          <button onClick={() => onClose()} className="ml-auto p-1 rounded text-slate-500 hover:text-slate-300">
+            <X size={15} />
+          </button>
+        </div>
+        <div className="p-5 space-y-4">
+          <p className="text-slate-300 text-sm">
+            This will <span className="text-orange-300 font-medium">cancel and reset</span> the{' '}
+            <code className="text-sky-300 text-xs">{clusterName}</code> cluster in Assisted Installer,
+            re-insert the discovery ISO, and reboot all VMs back into discovery mode.
+          </p>
+          <p className="text-slate-500 text-xs">
+            Any in-progress installation will be interrupted. Use <strong className="text-slate-400">Retry</strong> afterwards to start installation again.
+          </p>
+
+          {error && (
+            <div className="flex items-center gap-2 text-red-400 text-xs bg-red-500/10 border border-red-500/30 rounded px-3 py-2">
+              <AlertTriangle size={13} /> {error}
+            </div>
+          )}
+
+          <div className="flex gap-3">
+            <button onClick={() => onClose()}
+              className="flex-1 bg-navy-700 hover:bg-navy-600 text-slate-300 text-sm font-medium py-2 rounded-md transition-colors">
+              Cancel
+            </button>
+            <button onClick={confirm} disabled={busy}
+              className="flex-1 flex items-center justify-center gap-2 bg-orange-600 hover:bg-orange-500 disabled:opacity-50 text-white text-sm font-semibold py-2 rounded-md transition-colors">
+              {busy ? <Loader2 size={13} className="animate-spin" /> : <RotateCcw size={13} />}
+              {busy ? 'Resetting…' : 'Reset Cluster'}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 // ── Main component ────────────────────────────────────────────────────────────
 export default function OpenShiftJob() {
   const { jobId }           = useParams()
@@ -508,6 +573,7 @@ export default function OpenShiftJob() {
   const [syncOpen,   setSyncOpen]   = useState(false)
   const [syncing,    setSyncing]    = useState(false)
   const [retrying,   setRetrying]   = useState(false)
+  const [resetOpen,  setResetOpen]  = useState(false)
   const logRef              = useRef(null)
   const timerRef            = useRef(null)
 
@@ -583,6 +649,19 @@ export default function OpenShiftJob() {
     poll(true)
   }
 
+  // Handle reset modal close (may need creds)
+  const handleResetClose = (reason) => {
+    setResetOpen(false)
+    if (reason === 'need_creds') setSyncOpen(true)
+  }
+
+  const handleResetDone = () => {
+    setResetOpen(false)
+    clearInterval(timerRef.current)
+    timerRef.current = setInterval(() => poll(true), 5000)
+    poll(true)
+  }
+
   // Retry a failed deployment (cancel+reset cluster, reinsert ISO, reboot VMs)
   const retryDeploy = async () => {
     setRetrying(true)
@@ -646,6 +725,16 @@ export default function OpenShiftJob() {
         />
       )}
 
+      {/* Reset modal */}
+      {resetOpen && (
+        <ResetModal
+          jobId={jobId}
+          clusterName={job.config?.cluster_name || job.id}
+          onClose={handleResetClose}
+          onReset={handleResetDone}
+        />
+      )}
+
       {/* ── Back + header ────────────────────────────────────────────── */}
       <div className="flex items-center gap-3">
         <button onClick={() => navigate('/openshift')}
@@ -670,6 +759,16 @@ export default function OpenShiftJob() {
           </div>
         </div>
         <div className="flex items-center gap-2">
+          {/* Reset button: shown for any non-complete job with a cluster_id */}
+          {!isComplete && job.cluster_id && (
+            <button
+              onClick={() => setResetOpen(true)}
+              title="Cancel installation, reset cluster, and reboot VMs into discovery mode"
+              className="flex items-center gap-1.5 bg-navy-700 hover:bg-red-900/60 border border-navy-600 hover:border-red-700/60 text-slate-400 hover:text-red-300 text-xs font-semibold px-3 py-1.5 rounded-md transition-colors">
+              <RotateCcw size={12} /> Reset
+            </button>
+          )}
+
           {/* Sync button: shown for running or failed jobs that have a cluster_id */}
           {(isRunning || isFailed) && job.cluster_id && (
             <button

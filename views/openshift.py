@@ -121,6 +121,7 @@ _jobs: dict = {}
 _token_cache: dict = {}  # ps_hash → { token, expires_at }
 _lock = threading.Lock()
 _running_jobs: set = set()   # job_ids with active deploy threads in this process
+_stop_jobs: set   = set()    # job_ids whose threads should exit at the next safe point
 
 
 # ── job persistence ───────────────────────────────────────────────────────────
@@ -1265,6 +1266,10 @@ def _run_deploy(job_id: str, cfg: dict):
                 return []
 
         while time.time() < deadline:
+            if job_id in _stop_jobs:
+                _stop_jobs.discard(job_id)
+                log('Deployment stopped by reset request.', 'warn')
+                return
             try:
                 # Refresh token if needed
                 token = _get_access_token(cfg['offline_token'])
@@ -1402,6 +1407,10 @@ def _run_deploy(job_id: str, cfg: dict):
         consecutive_errors = 0
 
         while time.time() < deadline:
+            if job_id in _stop_jobs:
+                _stop_jobs.discard(job_id)
+                log('Deployment stopped by reset request.', 'warn')
+                return
             try:
                 token = _get_access_token(cfg['offline_token'])
                 r = _ai('GET', f'/clusters/{cluster_id}', token)
@@ -1608,6 +1617,10 @@ def _monitor_install_thread(job_id: str, cfg: dict, cluster_id: str):
         consecutive_errors  = 0
 
         while time.time() < deadline:
+            if job_id in _stop_jobs:
+                _stop_jobs.discard(job_id)
+                log('Monitoring stopped by reset request.', 'warn')
+                return
             try:
                 token = _get_access_token(cfg['offline_token'])
                 r = _ai('GET', f'/clusters/{cluster_id}', token)
@@ -1877,6 +1890,100 @@ def retry_job(job_id):
                      daemon=True, name=f'ocp-retry-{job_id}').start()
 
     return jsonify({'action': 'retrying', 'ai_status': ai_status, 'vms_rebooted': len(vm_names)})
+
+
+@ocp_bp.route('/api/openshift/jobs/<job_id>/reset', methods=['POST'])
+def reset_cluster(job_id):
+    """Reset a cluster back to discovery/ready state without auto-resuming.
+
+    Signals any running thread to stop, then:
+      1. Cancels the installation (if active)
+      2. Resets the AI cluster to insufficient
+      3. Re-inserts the discovery ISO into every VM
+      4. Reboots VMs back into discovery mode
+      5. Sets job status to 'pending', awaiting manual Retry or Sync
+
+    Works regardless of current job status — useful for running, stuck,
+    or failed deployments that need a clean slate at the cluster level.
+    """
+    err = _auth()
+    if err:
+        return err
+
+    job = _jobs.get(job_id)
+    if not job:
+        return jsonify({'error': 'Job not found'}), 404
+
+    cluster_id = job.get('cluster_id')
+    if not cluster_id:
+        return jsonify({'error': 'No cluster_id recorded — job must be restarted from scratch'}), 400
+
+    iso_path = job.get('iso_path')
+
+    stored        = _get_job_secrets(job_id)
+    data          = request.get_json(silent=True) or {}
+    offline_token = stored.get('offline_token') or data.get('offline_token', '').strip()
+    pull_secret   = stored.get('pull_secret')   or data.get('pull_secret', '').strip()
+
+    if not offline_token or not pull_secret:
+        return jsonify({'error': 'no_stored_credentials',
+                        'message': 'No stored credentials — please provide offline_token and pull_secret'}), 400
+
+    _store_job_secrets(job_id, offline_token, pull_secret)
+
+    def _log(msg, level='info'):
+        _job_log(job_id, msg, level)
+
+    # Signal any running thread to stop at its next safe point
+    if job_id in _running_jobs:
+        _stop_jobs.add(job_id)
+        _log('── Reset requested — signalling active thread to stop ──', 'warn')
+        # Give it up to 5 s to notice the flag (poll intervals are 20–30 s,
+        # so we can't wait for a clean exit; new thread starts immediately).
+        time.sleep(1)
+        _running_jobs.discard(job_id)
+
+    try:
+        token = _get_access_token(offline_token)
+        r = _ai('GET', f'/clusters/{cluster_id}', token)
+        ai_status = r.json().get('status', '')
+    except Exception as e:
+        return jsonify({'error': f'Could not reach Assisted Installer: {e}'}), 502
+
+    _log('── Resetting cluster ──', 'warn')
+    _log(f'  AI cluster status before reset: {ai_status}')
+
+    try:
+        _CANCELLABLE = {'installing', 'installing-in-progress', 'installing-pending-user-action',
+                        'finalizing', 'error'}
+        if ai_status in _CANCELLABLE:
+            rc = _ai('POST', f'/clusters/{cluster_id}/actions/cancel', token, body={})
+            _log(f'  Cancel: HTTP {rc.status_code}')
+            time.sleep(1)
+
+        rr = _ai('POST', f'/clusters/{cluster_id}/actions/reset', token, body={})
+        if rr.status_code not in (200, 201, 202):
+            return jsonify({'error': f'Reset failed: HTTP {rr.status_code} — {rr.text[:200]}'}), 502
+        _log(f'  Cluster reset ✓ (HTTP {rr.status_code})')
+
+    except Exception as e:
+        return jsonify({'error': f'Reset failed: {e}'}), 502
+
+    vm_names = job.get('vms', [])
+    if vm_names and iso_path and Path(iso_path).exists():
+        _log('  Re-inserting discovery ISO into VMs…')
+        _insert_cdroms(vm_names, iso_path, _log)
+        time.sleep(1)
+        _log('  Rebooting VMs into discovery mode…')
+        _reboot_vms(vm_names, _log)
+    elif vm_names:
+        _log(f'  ISO not found at {iso_path} — VMs not rebooted', 'warn')
+    else:
+        _log('  No VM list — skipping ISO reinsert', 'warn')
+
+    _job_set(job_id, status='pending', phase='Cluster reset — waiting for nodes', progress=45)
+
+    return jsonify({'action': 'reset', 'ai_status': ai_status, 'vms_rebooted': len(vm_names)})
 
 
 # ── Kubeconfig download ───────────────────────────────────────────────────────
