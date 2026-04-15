@@ -1465,6 +1465,222 @@ def _resume_pending_jobs():
 _resume_pending_jobs()
 
 
+# ── Sync job state from Assisted Installer ────────────────────────────────────
+
+def _collect_credentials(job_id: str, cluster_id: str, cluster_name: str,
+                          base_domain: str, token: str):
+    """Fetch kubeconfig + kubeadmin password and mark the job complete."""
+    def log(msg, level='info'):
+        _job_log(job_id, msg, level)
+
+    job_dir = WORK_DIR / job_id
+    job_dir.mkdir(parents=True, exist_ok=True)
+
+    phase_fn = lambda name, pct: _job_set(job_id, phase=name, progress=pct)
+    phase_fn('Collecting credentials', 98)
+
+    result = {}
+    try:
+        r = _ai('GET', f'/clusters/{cluster_id}/credentials', token)
+        creds = r.json()
+        kubeconfig_raw = creds.get('kubeconfig', '')
+        result['kubeadmin_password'] = creds.get('password', '')
+        kc_path = job_dir / 'kubeconfig'
+        kc_path.write_text(kubeconfig_raw)
+        result['kubeconfig_path'] = str(kc_path)
+        log(f'kubeconfig saved → {kc_path} ✓')
+    except Exception as e:
+        log(f'Credential fetch warning: {e}', 'warn')
+
+    api_url = f'https://api.{cluster_name}.{base_domain}:6443'
+    console = f'https://console-openshift-console.apps.{cluster_name}.{base_domain}'
+    result.update({'api_url': api_url, 'console_url': console, 'cluster_id': cluster_id})
+    _job_set(job_id, result=result, status='complete', progress=100, phase='Complete')
+    log('OpenShift installation complete! 🎉')
+    log(f'Console: {console}')
+    log(f'API:     {api_url}')
+    _delete_job_secrets(job_id)
+    _running_jobs.discard(job_id)
+
+
+def _monitor_install_thread(job_id: str, cfg: dict, cluster_id: str):
+    """Lightweight thread: just monitors an already-started installation."""
+    _running_jobs.add(job_id)
+
+    def log(msg, level='info'):
+        _job_log(job_id, msg, level)
+
+    cluster_name = cfg.get('cluster_name', '')
+    base_domain  = cfg.get('base_domain', '')
+    vm_names     = _jobs.get(job_id, {}).get('vms', [])
+
+    PHASE_PCT = {
+        'preparing-for-installation': 65,
+        'installing':                 70,
+        'installing-in-progress':     70,
+        'finalizing':                 88,
+        'installed':                  100,
+    }
+
+    try:
+        deadline = time.time() + 2 * 3600
+        last_status = ''
+        last_pct    = 0
+        pending_handled: set = set()
+        consecutive_errors  = 0
+
+        while time.time() < deadline:
+            try:
+                token = _get_access_token(cfg['offline_token'])
+                r = _ai('GET', f'/clusters/{cluster_id}', token)
+                cluster_data = r.json()
+                status      = cluster_data.get('status', '')
+                status_info = cluster_data.get('status_info', '')
+                install_pct = cluster_data.get('progress', {}).get('total_percentage', 0)
+                consecutive_errors = 0
+
+                if status != last_status or install_pct != last_pct:
+                    log(f'  Status: {status} ({install_pct}%) — {status_info}')
+                    last_status = status
+                    last_pct    = install_pct
+                    pct = PHASE_PCT.get(status, 70) + int(install_pct * 0.25)
+                    _job_set(job_id, progress=min(pct, 98),
+                             phase=f'Installing OpenShift ({install_pct}%)')
+
+                if status == 'installed':
+                    _collect_credentials(job_id, cluster_id, cluster_name, base_domain, token)
+                    return
+                if status in ('error', 'cancelled'):
+                    _job_set(job_id, status='failed', phase='Failed')
+                    log(f'Installation {status}: {status_info}', 'error')
+                    return
+
+                # Auto-recover pending-user-action hosts
+                try:
+                    hr = _ai('GET', f'/clusters/{cluster_id}/hosts', token)
+                    for h in hr.json():
+                        h_status = h.get('status', '')
+                        h_id     = h.get('id', '')
+                        hostname = h.get('requested_hostname') or h_id[:8]
+                        if 'pending-user-action' in h_status and h_id not in pending_handled:
+                            log(f'  ⚠ Host {hostname} booted ISO — auto-recovering…', 'warn')
+                            _eject_cdroms(vm_names, log)
+                            time.sleep(3)
+                            _reboot_vms(vm_names, log)
+                            pending_handled.add(h_id)
+                except Exception:
+                    pass
+
+            except Exception as e:
+                consecutive_errors += 1
+                if consecutive_errors == 1:
+                    log(f'  Monitoring error (retrying): {e}', 'warn')
+                wait = min(30 * (2 ** min(consecutive_errors - 1, 4)), 300)
+                time.sleep(wait)
+                continue
+
+            time.sleep(30)
+        else:
+            _job_set(job_id, status='failed', phase='Failed')
+            log('Installation monitoring timed out after 2 hours.', 'error')
+
+    except Exception as e:
+        _job_set(job_id, status='failed', phase='Failed')
+        _job_log(job_id, f'Unexpected error in monitor thread: {e}', 'error')
+    finally:
+        _running_jobs.discard(job_id)
+
+
+@ocp_bp.route('/api/openshift/jobs/<job_id>/sync', methods=['POST'])
+def sync_job(job_id):
+    """Sync a stuck/pending job with the real state in the Assisted Installer.
+
+    Accepts offline_token + pull_secret.  Queries the AI, then:
+      • installed              → collect credentials, mark complete
+      • installing / finalizing → spawn monitoring thread
+      • ready / known          → assign roles (multi-node) + trigger install + monitor
+      • error / cancelled      → mark failed
+      • anything else          → full resume via _run_deploy
+    """
+    err = _auth()
+    if err:
+        return err
+
+    job = _jobs.get(job_id)
+    if not job:
+        return jsonify({'error': 'Job not found'}), 404
+
+    data          = request.get_json(silent=True) or {}
+    offline_token = data.get('offline_token', '').strip()
+    pull_secret   = data.get('pull_secret', '').strip()
+
+    if not offline_token or not pull_secret:
+        return jsonify({'error': 'offline_token and pull_secret are required'}), 400
+
+    if job_id in _running_jobs:
+        return jsonify({'error': 'Job already has an active thread'}), 409
+
+    cluster_id = job.get('cluster_id')
+    if not cluster_id:
+        return jsonify({'error': 'No cluster_id recorded — job must be restarted from scratch'}), 400
+
+    cfg = {**job.get('config', {}), 'offline_token': offline_token, 'pull_secret': pull_secret}
+
+    # Store credentials now so auto-resume works on future restarts
+    _store_job_secrets(job_id, offline_token, pull_secret)
+
+    try:
+        token = _get_access_token(offline_token)
+        r = _ai('GET', f'/clusters/{cluster_id}', token)
+        ai_status   = r.json().get('status', '')
+        status_info = r.json().get('status_info', '')
+    except Exception as e:
+        return jsonify({'error': f'Could not reach Assisted Installer: {e}'}), 502
+
+    cluster_name = cfg.get('cluster_name', '')
+    base_domain  = cfg.get('base_domain', '')
+
+    _job_log(job_id, f'── Sync from Assisted Installer ──', 'warn')
+    _job_log(job_id, f'  AI cluster status: {ai_status} — {status_info}')
+
+    INSTALLING = {'preparing-for-installation', 'installing', 'installing-in-progress', 'finalizing'}
+
+    if ai_status == 'installed':
+        # Already done — just collect credentials in a quick thread
+        def _do_collect():
+            _running_jobs.add(job_id)
+            try:
+                tok = _get_access_token(offline_token)
+                _collect_credentials(job_id, cluster_id, cluster_name, base_domain, tok)
+            except Exception as ex:
+                _job_set(job_id, status='failed', phase='Failed')
+                _job_log(job_id, f'Credential collection failed: {ex}', 'error')
+            finally:
+                _running_jobs.discard(job_id)
+        threading.Thread(target=_do_collect, daemon=True,
+                         name=f'ocp-sync-{job_id}').start()
+        return jsonify({'action': 'collecting_credentials', 'ai_status': ai_status})
+
+    elif ai_status in INSTALLING:
+        _job_set(job_id, phase='Installing OpenShift', progress=65)
+        threading.Thread(target=_monitor_install_thread,
+                         args=(job_id, cfg, cluster_id),
+                         daemon=True, name=f'ocp-sync-{job_id}').start()
+        return jsonify({'action': 'monitoring_installation', 'ai_status': ai_status})
+
+    elif ai_status in ('error', 'cancelled'):
+        _job_set(job_id, status='failed', phase='Failed')
+        _job_log(job_id, f'Cluster {ai_status}: {status_info}', 'error')
+        return jsonify({'action': 'marked_failed', 'ai_status': ai_status})
+
+    else:
+        # ready / known / etc — do a full resume
+        _running_jobs.add(job_id)
+        threading.Thread(target=_run_deploy, args=(job_id, cfg),
+                         daemon=True, name=f'ocp-sync-{job_id}').start()
+        return jsonify({'action': 'full_resume', 'ai_status': ai_status})
+
+
 # ── Kubeconfig download ───────────────────────────────────────────────────────
 
 # ── ISO cache management ──────────────────────────────────────────────────────

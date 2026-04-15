@@ -5,6 +5,7 @@ import {
   Terminal, Download, Copy, Check, ExternalLink, RefreshCw,
   AlertTriangle, ChevronDown, ChevronRight,
   KeyRound, Disc3, Server, Network, Cpu, Trophy, ShieldCheck,
+  Upload, X,
 } from 'lucide-react'
 import api from '../api'
 
@@ -186,6 +187,118 @@ function WarningsPanel({ warnings, errors }) {
   )
 }
 
+// ── Sync-from-AI modal ────────────────────────────────────────────────────────
+function SyncModal({ jobId, onClose, onSynced }) {
+  const [offlineToken, setOfflineToken] = useState('')
+  const [pullSecret,   setPullSecret]   = useState('')
+  const [busy,  setBusy]  = useState(false)
+  const [error, setError] = useState('')
+  const [result, setResult] = useState(null)
+
+  const submit = async () => {
+    if (!offlineToken.trim() || !pullSecret.trim()) {
+      setError('Both fields are required')
+      return
+    }
+    setBusy(true)
+    setError('')
+    try {
+      const r = await api.post(`/openshift/jobs/${jobId}/sync`, {
+        offline_token: offlineToken.trim(),
+        pull_secret:   pullSecret.trim(),
+      })
+      setResult(r.data)
+      onSynced()
+    } catch (e) {
+      setError(e.response?.data?.error || 'Sync failed')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const ACTION_LABEL = {
+    collecting_credentials: 'Cluster already installed — collecting credentials…',
+    monitoring_installation: 'Installation in progress — monitoring resumed.',
+    marked_failed:           'Cluster failed in Assisted Installer — marked failed.',
+    full_resume:             'Resuming full deployment from saved state.',
+  }
+
+  return (
+    <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
+      <div className="bg-navy-800 border border-navy-600 rounded-xl w-full max-w-lg shadow-2xl">
+        {/* Header */}
+        <div className="flex items-center gap-3 px-5 py-4 border-b border-navy-700">
+          <Upload size={16} className="text-sky-400" />
+          <span className="text-slate-100 font-semibold text-sm">Sync from Assisted Installer</span>
+          <button onClick={onClose} className="ml-auto p-1 rounded text-slate-500 hover:text-slate-300">
+            <X size={15} />
+          </button>
+        </div>
+
+        {result ? (
+          <div className="p-5 space-y-4">
+            <div className="flex items-start gap-3 bg-green-500/10 border border-green-500/30 rounded-lg p-3">
+              <CheckCircle size={16} className="text-green-400 flex-shrink-0 mt-0.5" />
+              <p className="text-green-300 text-sm">{ACTION_LABEL[result.action] || `Action: ${result.action}`}</p>
+            </div>
+            <p className="text-slate-400 text-xs">AI reported status: <code className="text-sky-300">{result.ai_status}</code></p>
+            <button onClick={onClose}
+              className="w-full bg-sky-600 hover:bg-sky-500 text-white text-sm font-semibold py-2 rounded-md transition-colors">
+              Close
+            </button>
+          </div>
+        ) : (
+          <div className="p-5 space-y-4">
+            <p className="text-slate-400 text-sm">
+              Provide your Red Hat credentials to query the Assisted Installer and sync this job's real status.
+            </p>
+
+            <div className="space-y-1.5">
+              <label className="text-xs text-slate-400 font-medium">Offline Token</label>
+              <textarea
+                rows={3}
+                value={offlineToken}
+                onChange={e => setOfflineToken(e.target.value)}
+                placeholder="eyJhbGciO… (from console.redhat.com/openshift/token)"
+                className="w-full bg-navy-900 border border-navy-600 rounded-md px-3 py-2 text-slate-200 text-xs font-mono resize-none focus:outline-none focus:border-sky-500"
+              />
+            </div>
+
+            <div className="space-y-1.5">
+              <label className="text-xs text-slate-400 font-medium">Pull Secret</label>
+              <textarea
+                rows={3}
+                value={pullSecret}
+                onChange={e => setPullSecret(e.target.value)}
+                placeholder='{"auths":{"cloud.openshift.com":…}}'
+                className="w-full bg-navy-900 border border-navy-600 rounded-md px-3 py-2 text-slate-200 text-xs font-mono resize-none focus:outline-none focus:border-sky-500"
+              />
+            </div>
+
+            {error && (
+              <div className="flex items-center gap-2 text-red-400 text-xs bg-red-500/10 border border-red-500/30 rounded px-3 py-2">
+                <AlertTriangle size={13} /> {error}
+              </div>
+            )}
+
+            <div className="flex gap-3">
+              <button onClick={onClose}
+                className="flex-1 bg-navy-700 hover:bg-navy-600 text-slate-300 text-sm font-medium py-2 rounded-md transition-colors">
+                Cancel
+              </button>
+              <button onClick={submit} disabled={busy}
+                className="flex-1 flex items-center justify-center gap-2 bg-sky-600 hover:bg-sky-500 disabled:opacity-50 text-white text-sm font-semibold py-2 rounded-md transition-colors">
+                {busy ? <Loader2 size={13} className="animate-spin" /> : <Upload size={13} />}
+                {busy ? 'Syncing…' : 'Sync Now'}
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
 // ── Main component ────────────────────────────────────────────────────────────
 export default function OpenShiftJob() {
   const { jobId }           = useParams()
@@ -194,6 +307,7 @@ export default function OpenShiftJob() {
   const [copied, setCopied] = useState('')
   const [loading, setLoad]  = useState(true)
   const [configOpen, setConfigOpen] = useState(false)
+  const [syncOpen,   setSyncOpen]   = useState(false)
   const logRef              = useRef(null)
   const timerRef            = useRef(null)
 
@@ -238,6 +352,15 @@ export default function OpenShiftJob() {
     return parseLogs(job.logs || [], job.config)
   }, [job?.logs?.length, job?.config])  // eslint-disable-line
 
+  // Resume polling when sync completes
+  const handleSynced = () => {
+    setSyncOpen(false)
+    // Restart polling in case it stopped
+    clearInterval(timerRef.current)
+    timerRef.current = setInterval(() => poll(true), 5000)
+    poll(true)
+  }
+
   if (loading) {
     return (
       <div className="flex items-center justify-center py-24 text-slate-500 gap-2">
@@ -277,6 +400,15 @@ export default function OpenShiftJob() {
   return (
     <div className="max-w-4xl space-y-4">
 
+      {/* Sync modal */}
+      {syncOpen && (
+        <SyncModal
+          jobId={jobId}
+          onClose={() => setSyncOpen(false)}
+          onSynced={handleSynced}
+        />
+      )}
+
       {/* ── Back + header ────────────────────────────────────────────── */}
       <div className="flex items-center gap-3">
         <button onClick={() => navigate('/openshift')}
@@ -300,12 +432,21 @@ export default function OpenShiftJob() {
             <span className="font-mono text-slate-600">{job.id}</span>
           </div>
         </div>
-        {isFailed && (
-          <button onClick={() => navigate('/openshift/deploy')}
-            className="flex items-center gap-1.5 bg-sky-600 hover:bg-sky-500 text-white text-xs font-semibold px-3 py-1.5 rounded-md transition-colors">
-            <RefreshCw size={12} /> New Deployment
-          </button>
-        )}
+        <div className="flex items-center gap-2">
+          {/* Sync button: shown for pending jobs that have a cluster_id */}
+          {isRunning && job.cluster_id && (
+            <button onClick={() => setSyncOpen(true)}
+              className="flex items-center gap-1.5 bg-amber-600/80 hover:bg-amber-500 text-white text-xs font-semibold px-3 py-1.5 rounded-md transition-colors">
+              <Upload size={12} /> Sync from AI
+            </button>
+          )}
+          {isFailed && (
+            <button onClick={() => navigate('/openshift/deploy')}
+              className="flex items-center gap-1.5 bg-sky-600 hover:bg-sky-500 text-white text-xs font-semibold px-3 py-1.5 rounded-md transition-colors">
+              <RefreshCw size={12} /> New Deployment
+            </button>
+          )}
+        </div>
       </div>
 
       {/* ── Status banner ────────────────────────────────────────────── */}
