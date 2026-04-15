@@ -714,6 +714,7 @@ def attach_cloud_image(uuid):
 
     data = request.get_json() or {}
     base_image = str(data.get('base_image', '')).strip()
+    disk_size_gb = int(data.get('disk_size_gb') or 20)
     if not base_image:
         return jsonify({'error': 'base_image is required'}), 400
     if not os.path.exists(base_image):
@@ -735,14 +736,14 @@ def attach_cloud_image(uuid):
         if os.path.exists(overlay):
             return jsonify({'error': f'Overlay already exists: {os.path.basename(overlay)}'}), 409
         subprocess.run(
-            ['qemu-img', 'create', '-f', 'qcow2', '-b', base_image, '-F', 'qcow2', overlay, '20G'],
+            ['qemu-img', 'create', '-f', 'qcow2', '-b', base_image, '-F', 'qcow2', overlay, f'{disk_size_gb}G'],
             check=True, capture_output=True, text=True
         )
         created.append(overlay)
 
-        # 2. cloud-init seed ISO
+        # 2. cloud-init seed ISO — stored in /tmp so it is removed automatically on reboot
         import tempfile, shutil
-        seed_iso = os.path.join(STORAGE_PATH, f'{safe_name}-seed.iso')
+        seed_iso = os.path.join('/tmp', f'{safe_name}-seed.iso')
 
         # Generate a proper SHA-512 password hash so the password is permanent
         # and never expires regardless of cloud-init version.

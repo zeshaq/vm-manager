@@ -128,6 +128,7 @@ export default function VMDetail() {
   // disk tab: 'attach' | 'create' | 'cloud'
   const [diskTab, setDiskTab] = useState('attach')
   const [cloudImage, setCloudImage] = useState('')
+  const [cloudDiskSize, setCloudDiskSize] = useState('20')
 
   // network
   const [newIface, setNewIface] = useState({ mode: 'nat', source: '' })
@@ -416,27 +417,46 @@ export default function VMDetail() {
             {cloudImages.length === 0 ? (
               <p className="text-yellow-400 text-sm">No images found in <code className="bg-navy-700 px-1 rounded">/var/lib/libvirt/images/cloud-images/</code>. Place cloud images there first.</p>
             ) : (
-              <div className="flex gap-2">
-                <select
-                  value={cloudImage}
-                  onChange={e => setCloudImage(e.target.value)}
-                  className={inputCls('flex-1')}>
-                  <option value="">Select a cloud image…</option>
-                  {cloudImages.map(f => (
-                    <option key={f.path} value={f.path}>{f.name} — {f.size}</option>
-                  ))}
-                </select>
-                <button
-                  onClick={() => {
-                    if (!cloudImage) return
-                    act('cloud-image', () => api.post(`/vms/${uuid}/cloud-image`, { base_image: cloudImage }))
-                    setCloudImage('')
-                    setDiskTab('attach')
-                  }}
-                  disabled={saving['cloud-image'] || !cloudImage}
-                  className="flex items-center gap-1.5 bg-sky-500 hover:bg-sky-400 text-white px-3 py-2 rounded-md text-sm disabled:opacity-50 whitespace-nowrap">
-                  <HardDrive size={14} /> {saving['cloud-image'] ? 'Setting up…' : 'Attach & Configure'}
-                </button>
+              <div className="space-y-3">
+                <div className="flex gap-2">
+                  <select
+                    value={cloudImage}
+                    onChange={e => setCloudImage(e.target.value)}
+                    className={inputCls('flex-1')}>
+                    <option value="">Select a cloud image…</option>
+                    {cloudImages.map(f => (
+                      <option key={f.path} value={f.path}>{f.name} — {f.size}</option>
+                    ))}
+                  </select>
+                </div>
+                <div className="flex gap-2 items-end">
+                  <div>
+                    <label className="block text-xs text-slate-400 mb-1">Boot disk size (GB)</label>
+                    <input
+                      type="number"
+                      min="5"
+                      max="2000"
+                      value={cloudDiskSize}
+                      onChange={e => setCloudDiskSize(e.target.value)}
+                      className={inputCls('w-28')}
+                    />
+                  </div>
+                  <button
+                    onClick={() => {
+                      if (!cloudImage) return
+                      act('cloud-image', () => api.post(`/vms/${uuid}/cloud-image`, {
+                        base_image: cloudImage,
+                        disk_size_gb: parseInt(cloudDiskSize) || 20,
+                      }))
+                      setCloudImage('')
+                      setCloudDiskSize('20')
+                      setDiskTab('attach')
+                    }}
+                    disabled={saving['cloud-image'] || !cloudImage}
+                    className="flex items-center gap-1.5 bg-sky-500 hover:bg-sky-400 text-white px-3 py-2 rounded-md text-sm disabled:opacity-50 whitespace-nowrap">
+                    <HardDrive size={14} /> {saving['cloud-image'] ? 'Setting up…' : 'Attach & Configure'}
+                  </button>
+                </div>
               </div>
             )}
           </div>
