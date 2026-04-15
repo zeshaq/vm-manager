@@ -124,6 +124,10 @@ export default function VMDetail() {
   const [showCreate, setShowCreate] = useState(false)
   const [newDisk, setNewDisk] = useState({ name: '', size: '', format: 'qcow2' })
 
+  // disk tab: 'attach' | 'create' | 'cloud'
+  const [diskTab, setDiskTab] = useState('attach')
+  const [cloudImage, setCloudImage] = useState('')
+
   // network
   const [newIface, setNewIface] = useState({ mode: 'nat', source: '' })
   const [customSource, setCustomSource] = useState('')
@@ -277,63 +281,45 @@ export default function VMDetail() {
           <p className="text-slate-400 text-sm mb-4">No disks attached.</p>
         )}
 
-        {/* Tab toggle: attach existing / create new */}
+        {/* Tab toggle */}
         <div className="flex gap-1 mb-3">
-          <button
-            onClick={() => setShowCreate(false)}
-            className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${!showCreate ? 'bg-sky-600 text-white' : 'bg-navy-800 text-slate-400 hover:text-slate-200'}`}>
-            Attach Existing
-          </button>
-          <button
-            onClick={() => setShowCreate(true)}
-            className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${showCreate ? 'bg-sky-600 text-white' : 'bg-navy-800 text-slate-400 hover:text-slate-200'}`}>
-            Create &amp; Attach New
-          </button>
+          {[['attach', 'Attach Existing'], ['create', 'Create & Attach New'], ['cloud', 'Cloud Image']].map(([key, label]) => (
+            <button key={key} onClick={() => setDiskTab(key)}
+              className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${diskTab === key ? 'bg-sky-600 text-white' : 'bg-navy-800 text-slate-400 hover:text-slate-200'}`}>
+              {label}
+            </button>
+          ))}
         </div>
 
-        {!showCreate ? (
-          /* ── Attach existing ── */
+        {diskTab === 'attach' && (
           <div className="flex gap-2">
             <DiskPathInput value={diskPath} onChange={setDiskPath} images={images} />
             <button
-              onClick={() => {
-                if (!diskPath) return
-                act('add-disk', () => api.post(`/vms/${uuid}/disks`, { file_path: diskPath }))
-                setDiskPath('')
-              }}
+              onClick={() => { if (!diskPath) return; act('add-disk', () => api.post(`/vms/${uuid}/disks`, { file_path: diskPath })); setDiskPath('') }}
               disabled={saving['add-disk'] || !diskPath}
               className="flex items-center gap-1.5 bg-sky-500 hover:bg-sky-400 text-white px-3 py-2 rounded-md text-sm disabled:opacity-50">
               <PlusCircle size={14} /> Attach
             </button>
           </div>
-        ) : (
-          /* ── Create & attach new disk ── */
+        )}
+
+        {diskTab === 'create' && (
           <div className="bg-navy-800 border border-navy-500 rounded-lg p-4 space-y-3">
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
               <div>
                 <label className="block text-xs text-slate-400 mb-1">Disk name</label>
-                <input
-                  value={newDisk.name}
-                  onChange={e => setNewDisk(p => ({ ...p, name: e.target.value }))}
-                  placeholder="e.g. myvm-data"
-                  className={inputCls('w-full')}
-                />
+                <input value={newDisk.name} onChange={e => setNewDisk(p => ({ ...p, name: e.target.value }))}
+                  placeholder="e.g. myvm-data" className={inputCls('w-full')} />
               </div>
               <div>
                 <label className="block text-xs text-slate-400 mb-1">Size (GB)</label>
-                <input
-                  type="number" min="1"
-                  value={newDisk.size}
+                <input type="number" min="1" value={newDisk.size}
                   onChange={e => setNewDisk(p => ({ ...p, size: e.target.value }))}
-                  placeholder="20"
-                  className={inputCls('w-full')}
-                />
+                  placeholder="20" className={inputCls('w-full')} />
               </div>
               <div>
                 <label className="block text-xs text-slate-400 mb-1">Format</label>
-                <select
-                  value={newDisk.format}
-                  onChange={e => setNewDisk(p => ({ ...p, format: e.target.value }))}
+                <select value={newDisk.format} onChange={e => setNewDisk(p => ({ ...p, format: e.target.value }))}
                   className={inputCls('w-full')}>
                   <option value="qcow2">qcow2 (recommended)</option>
                   <option value="raw">raw</option>
@@ -342,19 +328,37 @@ export default function VMDetail() {
             </div>
             <div className="flex gap-2">
               <button
-                onClick={() => {
-                  if (!newDisk.name || !newDisk.size) return
-                  act('create-disk', () => api.post(`/vms/${uuid}/disks/create`, newDisk))
-                  setNewDisk({ name: '', size: '', format: 'qcow2' })
-                  setShowCreate(false)
-                }}
+                onClick={() => { if (!newDisk.name || !newDisk.size) return; act('create-disk', () => api.post(`/vms/${uuid}/disks/create`, newDisk)); setNewDisk({ name: '', size: '', format: 'qcow2' }); setDiskTab('attach') }}
                 disabled={saving['create-disk'] || !newDisk.name || !newDisk.size}
                 className="flex items-center gap-1.5 bg-sky-500 hover:bg-sky-400 text-white px-4 py-2 rounded-md text-sm disabled:opacity-50">
                 <HardDrive size={14} /> {saving['create-disk'] ? 'Creating…' : 'Create & Attach'}
               </button>
-              <button onClick={() => setShowCreate(false)}
+              <button onClick={() => setDiskTab('attach')}
                 className="flex items-center gap-1.5 bg-navy-600 hover:bg-navy-500 border border-navy-400 text-slate-300 px-3 py-2 rounded-md text-sm">
                 <X size={14} /> Cancel
+              </button>
+            </div>
+          </div>
+        )}
+
+        {diskTab === 'cloud' && (
+          <div className="bg-navy-800 border border-navy-500 rounded-lg p-4 space-y-3">
+            <p className="text-slate-400 text-sm">
+              Select a Ubuntu/cloud image. An overlay disk + cloud-init seed ISO will be created and attached.
+              On first boot the VM will have user <code className="text-sky-400 bg-navy-700 px-1 rounded">ze</code> / password <code className="text-sky-400 bg-navy-700 px-1 rounded">ze</code>.
+            </p>
+            <div className="flex gap-2">
+              <DiskPathInput value={cloudImage} onChange={setCloudImage} images={images} />
+              <button
+                onClick={() => {
+                  if (!cloudImage) return
+                  act('cloud-image', () => api.post(`/vms/${uuid}/cloud-image`, { base_image: cloudImage }))
+                  setCloudImage('')
+                  setDiskTab('attach')
+                }}
+                disabled={saving['cloud-image'] || !cloudImage}
+                className="flex items-center gap-1.5 bg-sky-500 hover:bg-sky-400 text-white px-3 py-2 rounded-md text-sm disabled:opacity-50 whitespace-nowrap">
+                <HardDrive size={14} /> {saving['cloud-image'] ? 'Setting up…' : 'Attach & Configure'}
               </button>
             </div>
           </div>

@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { PlusCircle, Cpu, HardDrive } from 'lucide-react'
+import { PlusCircle, Cpu } from 'lucide-react'
 import api from '../api'
 
 export default function CreateVM() {
@@ -8,11 +8,10 @@ export default function CreateVM() {
   const RAM_OPTIONS = [2, 4, 8, 16, 32, 64, 128]
 
   const [form, setForm] = useState({
-    name:       '',
-    ram:        8192,
-    cpu:        '2',
-    host_cpu:   true,
-    base_image: '',
+    name:     '',
+    ram:      8192,
+    cpu:      '2',
+    host_cpu: true,
   })
   const [loading, setLoading] = useState(false)
   const [error, setError]     = useState('')
@@ -25,13 +24,12 @@ export default function CreateVM() {
     setLoading(true)
     try {
       const res = await api.post('/vms', {
-        name:       form.name,
-        ram:        form.ram,
-        cpu:        parseInt(form.cpu),
-        host_cpu:   form.host_cpu,
-        base_image: form.base_image.trim() || null,
-        disks:      [],
-        devices:    [],
+        name:     form.name,
+        ram:      form.ram,
+        cpu:      parseInt(form.cpu),
+        host_cpu: form.host_cpu,
+        disks:    [],
+        devices:  [],
       })
       navigate(`/vms/${res.data.uuid}`)
     } catch (err) {
@@ -108,26 +106,6 @@ export default function CreateVM() {
               className="w-full bg-navy-800 border border-navy-400 text-slate-200 focus:border-sky-500 focus:outline-none rounded-md px-3 py-2.5"
               required
             />
-          </div>
-
-          {/* Base Image */}
-          <div>
-            <label className="block text-sm font-medium text-slate-300 mb-1.5 flex items-center gap-2">
-              <HardDrive size={14} className="text-sky-400" />
-              Cloud Image <span className="text-slate-500 font-normal">(optional)</span>
-            </label>
-            <input
-              type="text"
-              value={form.base_image}
-              onChange={e => set('base_image', e.target.value)}
-              placeholder="/var/lib/libvirt/images/ubuntu-22.04-cloudimg.img"
-              className="w-full bg-navy-800 border border-navy-400 text-slate-200 focus:border-sky-500 focus:outline-none rounded-md px-3 py-2.5 font-mono text-sm"
-            />
-            {form.base_image.trim() && (
-              <p className="text-sky-400/70 text-xs mt-1">
-                Cloud-init will configure user <code className="text-sky-400">ze</code> / password <code className="text-sky-400">ze</code> on first boot
-              </p>
-            )}
           </div>
 
           {/* Host CPU passthrough */}

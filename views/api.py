@@ -209,8 +209,6 @@ def create_vm():
     cpu = data.get('cpu')
     host_cpu = data.get('host_cpu', False)
     devices = data.get('devices', [])
-    base_image = str(data.get('base_image', '')).strip() or None
-
     # Multi-disk support: `disks` is a list of {path, size_gb}.
     # Legacy single-disk fields (disk_path / disk_size_gb) are still accepted.
     raw_disks = data.get('disks')
@@ -219,10 +217,6 @@ def create_vm():
         legacy_path = str(data.get('disk_path', '')).strip() or None
         legacy_size = data.get('disk_size_gb', 20)
         raw_disks = [{'path': legacy_path, 'size_gb': legacy_size}] if legacy_path else []
-
-    # base_image is a shorthand for a single cloud image disk
-    if base_image and not any(str(d.get('path', '')).strip() == base_image for d in raw_disks):
-        raw_disks = [{'path': base_image, 'size_gb': 20}] + list(raw_disks)
 
     if not name or not ram or not cpu:
         return jsonify({'error': 'Missing required fields: name, ram, cpu'}), 400
@@ -287,46 +281,7 @@ def create_vm():
                     except OSError: pass
                 return jsonify({'error': f'Failed to create disk overlay: {exc.stderr.strip()}'}), 500
 
-    # Cloud-init seed ISO ──────────────────────────────────────────────────────
-    # If a base image was provided, generate a seed ISO so the VM boots with
-    # user ze / password ze pre-configured (no manual cloud-init needed).
     seed_iso = None
-    if base_image:
-        import tempfile, shutil
-        seed_iso = os.path.join(STORAGE_PATH, f'{safe_name}-seed.iso')
-        if not os.path.exists(seed_iso):
-            user_data = """\
-#cloud-config
-hostname: {hostname}
-users:
-  - name: ze
-    sudo: ALL=(ALL) NOPASSWD:ALL
-    shell: /bin/bash
-    lock_passwd: false
-    plain_text_passwd: 'ze'
-chpasswd:
-  expire: false
-ssh_pwauth: true
-""".format(hostname=name)
-            meta_data = f"instance-id: {safe_name}\nlocal-hostname: {name}\n"
-            tmp = tempfile.mkdtemp()
-            try:
-                ud = os.path.join(tmp, 'user-data')
-                md = os.path.join(tmp, 'meta-data')
-                with open(ud, 'w') as f: f.write(user_data)
-                with open(md, 'w') as f: f.write(meta_data)
-                result = subprocess.run(
-                    ['cloud-localds', seed_iso, ud, md],
-                    capture_output=True, text=True
-                )
-                if result.returncode != 0:
-                    current_app.logger.warning(f'cloud-localds failed: {result.stderr.strip()}')
-                    seed_iso = None
-                else:
-                    resolved_disks.append(seed_iso)
-                    current_app.logger.info(f'Cloud-init seed ISO created: {seed_iso}')
-            finally:
-                shutil.rmtree(tmp, ignore_errors=True)
 
     # Define the VM ────────────────────────────────────────────────────────────
     try:
@@ -735,6 +690,121 @@ def delete_disk(uuid):
         return jsonify({'success': True})
 
     except libvirt.libvirtError as e:
+        return jsonify({'error': str(e)}), 500
+    finally:
+        conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Cloud image setup — create overlay + cloud-init seed ISO and attach both
+# ---------------------------------------------------------------------------
+
+@api_bp.route('/vms/<uuid>/cloud-image', methods=['POST'])
+def attach_cloud_image(uuid):
+    err = require_auth()
+    if err:
+        return err
+
+    data = request.get_json() or {}
+    base_image = str(data.get('base_image', '')).strip()
+    if not base_image:
+        return jsonify({'error': 'base_image is required'}), 400
+    if not os.path.exists(base_image):
+        return jsonify({'error': f'Image not found: {base_image}'}), 422
+
+    conn = get_db_connection()
+    if not conn:
+        return jsonify({'error': 'Could not connect to hypervisor'}), 500
+
+    try:
+        dom = conn.lookupByUUIDString(uuid)
+        vm_name = dom.name()
+        safe_name = re.sub(r'[^a-zA-Z0-9._-]', '_', vm_name)
+
+        created = []
+
+        # 1. qcow2 overlay
+        overlay = os.path.join(STORAGE_PATH, f'{safe_name}.qcow2')
+        if os.path.exists(overlay):
+            return jsonify({'error': f'Overlay already exists: {os.path.basename(overlay)}'}), 409
+        subprocess.run(
+            ['qemu-img', 'create', '-f', 'qcow2', '-b', base_image, '-F', 'qcow2', overlay, '20G'],
+            check=True, capture_output=True, text=True
+        )
+        created.append(overlay)
+
+        # 2. cloud-init seed ISO
+        import tempfile, shutil
+        seed_iso = os.path.join(STORAGE_PATH, f'{safe_name}-seed.iso')
+        user_data = f"""\
+#cloud-config
+hostname: {vm_name}
+users:
+  - name: ze
+    sudo: ALL=(ALL) NOPASSWD:ALL
+    shell: /bin/bash
+    lock_passwd: false
+    plain_text_passwd: 'ze'
+chpasswd:
+  expire: false
+ssh_pwauth: true
+"""
+        meta_data = f"instance-id: {safe_name}\nlocal-hostname: {vm_name}\n"
+        tmp = tempfile.mkdtemp()
+        try:
+            with open(os.path.join(tmp, 'user-data'), 'w') as f: f.write(user_data)
+            with open(os.path.join(tmp, 'meta-data'), 'w') as f: f.write(meta_data)
+            subprocess.run(
+                ['cloud-localds', seed_iso, os.path.join(tmp, 'user-data'), os.path.join(tmp, 'meta-data')],
+                check=True, capture_output=True, text=True
+            )
+            created.append(seed_iso)
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+        # 3. attach both devices
+        flags = libvirt.VIR_DOMAIN_AFFECT_CONFIG
+        if dom.isActive():
+            flags |= libvirt.VIR_DOMAIN_AFFECT_LIVE
+
+        for path in [overlay, seed_iso]:
+            is_iso = path.endswith('.iso')
+            bus = 'sata' if is_iso else 'virtio'
+            # find next free target device
+            xml_str = dom.XMLDesc(libvirt.VIR_DOMAIN_XML_INACTIVE)
+            tree = ET.fromstring(xml_str)
+            used = {d.find('target').get('dev') for d in tree.findall('devices/disk') if d.find('target') is not None}
+            if is_iso:
+                idx = next(i for i in range(26) if f'sd{chr(ord("a")+i)}' not in used)
+                target = f'sd{chr(ord("a")+idx)}'
+                disk_xml = f"""<disk type='file' device='cdrom'>
+  <driver name='qemu' type='raw'/>
+  <source file='{path}'/>
+  <target dev='{target}' bus='sata'/>
+  <readonly/>
+</disk>"""
+            else:
+                idx = next(i for i in range(26) if f'vd{chr(ord("a")+i)}' not in used)
+                target = f'vd{chr(ord("a")+idx)}'
+                disk_xml = f"""<disk type='file' device='disk'>
+  <driver name='qemu' type='qcow2' cache='none'/>
+  <source file='{path}'/>
+  <target dev='{target}' bus='virtio'/>
+</disk>"""
+            dom.attachDeviceFlags(disk_xml, flags)
+
+        current_app.logger.info(f'Cloud image setup for {vm_name}: overlay={overlay}, seed={seed_iso}')
+        return jsonify({'success': True, 'overlay': overlay, 'seed_iso': seed_iso}), 200
+
+    except subprocess.CalledProcessError as e:
+        for p in created:
+            try: os.remove(p)
+            except OSError: pass
+        return jsonify({'error': f'Disk setup failed: {e.stderr.strip()}'}), 500
+    except libvirt.libvirtError as e:
+        for p in created:
+            try: os.remove(p)
+            except OSError: pass
         return jsonify({'error': str(e)}), 500
     finally:
         conn.close()
