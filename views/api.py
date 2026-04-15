@@ -765,6 +765,9 @@ users:
 chpasswd:
   expire: false
 ssh_pwauth: true
+runcmd:
+  - touch /etc/cloud/cloud-init.disabled
+  - systemctl disable cloud-init cloud-init-local cloud-config cloud-final 2>/dev/null || true
 """
         meta_data = f"instance-id: {safe_name}\nlocal-hostname: {vm_name}\n"
         tmp = tempfile.mkdtemp()
