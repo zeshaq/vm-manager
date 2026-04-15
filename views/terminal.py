@@ -75,7 +75,7 @@ def vm_console_ws():
 
     pid, fd = pty.fork()
     if pid == 0:
-        os.execvp('virsh', ['virsh', 'console', vm_name])
+        os.execvp('virsh', ['virsh', '-c', 'qemu:///system', 'console', vm_name])
         os._exit(1)
 
     _set_pty_size(fd, 220, 50)
