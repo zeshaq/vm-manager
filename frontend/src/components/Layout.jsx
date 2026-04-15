@@ -157,7 +157,7 @@ export default function Layout({ children, username, onLogout }) {
           {hostname && (
             <div
               className="mt-2 px-3 py-2 rounded-md bg-sky-700 text-white font-bold truncate"
-              style={{ fontSize: '3rem', lineHeight: '1.1' }}
+              style={{ fontSize: '2rem', lineHeight: '1.1' }}
               title={hostname}
             >
               {hostname.toUpperCase()}
