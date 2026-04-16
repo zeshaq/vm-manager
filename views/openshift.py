@@ -1385,6 +1385,9 @@ def _run_deploy(job_id: str, cfg: dict):
                  f'Only {len(registered)} registered.')
             return
 
+        # Build MAC → vm_name reverse lookup (used in pending-user-action handler below)
+        mac_to_vm: dict = {mac.lower(): vm for vm, mac in mac_map.items()}
+
         # Set host roles + hostnames for multi-node.
         # Match each registered host to its VM via MAC address so the hostname
         # in OpenShift matches the libvirt VM name exactly.
@@ -1394,8 +1397,7 @@ def _run_deploy(job_id: str, cfg: dict):
             r = _ai('GET', f'/clusters/{cluster_id}/hosts', token)
             hosts = r.json()
 
-            # Build MAC → vm_name lookup from mac_map
-            mac_to_vm = {mac.lower(): vm for vm, mac in mac_map.items()}
+            # mac_to_vm already built above
 
             # Sort hosts by discovery time for stable fallback ordering
             hosts_sorted = sorted(hosts, key=lambda h: h.get('created_at', ''))
@@ -1514,20 +1516,44 @@ def _run_deploy(job_id: str, cfg: dict):
                         h_status = h.get('status', '')
                         h_id     = h.get('id', '')
                         hostname = h.get('requested_hostname') or h_id[:8]
-                        if 'pending-user-action' in h_status and h_id not in pending_handled:
-                            # Match API hostname back to actual libvirt VM name.
-                            # requested_hostname may be full FQDN or short name.
+                        if 'pending-user-action' not in h_status or h_id in pending_handled:
+                            continue
+
+                        # 1) Try MAC-based match (most reliable)
+                        vm_match = None
+                        raw_inv = h.get('inventory') or '{}'
+                        if isinstance(raw_inv, str):
+                            try:
+                                inv = json.loads(raw_inv)
+                            except Exception:
+                                inv = {}
+                        else:
+                            inv = raw_inv
+                        nics = inv.get('interfaces') or inv.get('nics') or []
+                        for nic in nics:
+                            mac = (nic.get('mac_address') or nic.get('macAddress') or '').lower()
+                            if mac and mac in mac_to_vm:
+                                vm_match = mac_to_vm[mac]
+                                break
+
+                        # 2) Hostname-based fallback
+                        if not vm_match:
                             vm_match = next(
                                 (v for v in vm_names
                                  if v == hostname or hostname.startswith(v) or v in hostname),
                                 None
                             )
-                            target_vms = [vm_match] if vm_match else vm_names
-                            log(f'  ⚠ Host {hostname} rebooted into ISO — ejecting and rebooting {vm_match or "all VMs"}…', 'warn')
-                            _eject_cdroms(target_vms, log)
-                            time.sleep(2)
-                            _reboot_vms(target_vms, log)
+
+                        if not vm_match:
+                            log(f'  ⚠ Host {hostname} pending-user-action but VM not identified — skipping reboot', 'warn')
                             pending_handled.add(h_id)
+                            continue
+
+                        log(f'  ⚠ Host {hostname} rebooted into ISO — ejecting and rebooting {vm_match}…', 'warn')
+                        _eject_cdroms([vm_match], log)
+                        time.sleep(2)
+                        _reboot_vms([vm_match], log)
+                        pending_handled.add(h_id)
                 except Exception:
                     pass  # don't fail monitoring on host-check errors
 
@@ -1770,11 +1796,14 @@ def _monitor_install_thread(job_id: str, cfg: dict, cluster_id: str):
                                  if v == hostname or hostname.startswith(v) or v in hostname),
                                 None
                             )
-                        target_vms = [vm_match] if vm_match else vm_names
-                        log(f'  ⚠ Host {hostname} rebooted into ISO — ejecting and rebooting {vm_match or "all VMs"}…', 'warn')
-                        _eject_cdroms(target_vms, log)
+                        if not vm_match:
+                            log(f'  ⚠ Host {hostname} pending-user-action but VM not identified — skipping reboot (manual intervention may be needed)', 'warn')
+                            pending_last_handled[h_id] = now
+                            continue
+                        log(f'  ⚠ Host {hostname} rebooted into ISO — ejecting and rebooting {vm_match}…', 'warn')
+                        _eject_cdroms([vm_match], log)
                         time.sleep(2)
-                        _reboot_vms(target_vms, log)
+                        _reboot_vms([vm_match], log)
                         pending_last_handled[h_id] = now
                 except Exception:
                     pass
