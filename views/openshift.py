@@ -223,33 +223,6 @@ def _job_set(job_id: str, **kw):
             _save_jobs()
 
 
-def _job_event(job_id: str, event_type: str, **kw):
-    """Append a structured event to the job's event feed (max 300 kept)."""
-    with _lock:
-        if job_id not in _jobs:
-            return
-        ev = {'ts': time.strftime('%H:%M:%S'), 'type': event_type, **kw}
-        evs = _jobs[job_id].setdefault('events', [])
-        evs.append(ev)
-        if len(evs) > 300:
-            _jobs[job_id]['events'] = evs[-300:]
-        _save_jobs()
-
-
-def _parse_host_mac(host: dict, mac_to_vm: dict) -> str | None:
-    """Extract the libvirt VM name for a host by matching its NIC MAC address."""
-    raw_inv = host.get('inventory') or '{}'
-    try:
-        inv = json.loads(raw_inv) if isinstance(raw_inv, str) else raw_inv
-    except Exception:
-        inv = {}
-    for nic in (inv.get('interfaces') or inv.get('nics') or []):
-        mac = (nic.get('mac_address') or nic.get('macAddress') or '').lower()
-        if mac and mac in mac_to_vm:
-            return mac_to_vm[mac]
-    return None
-
-
 # ── Assisted Installer API ────────────────────────────────────────────────────
 
 def _get_access_token(offline_token: str) -> str:
@@ -888,17 +861,17 @@ def _vm_xml(name: str, vcpus: int, ram_mb: int, disk_path: str,
   <cpu mode='host-passthrough'/>
   <clock offset='utc'/>
   <devices>
-    <disk type='file' device='disk'>
-      <driver name='qemu' type='qcow2' cache='none'/>
-      <source file='{disk_path}'/>
-      <target dev='vda' bus='virtio'/>
-      <boot order='1'/>
-    </disk>
     <disk type='file' device='cdrom'>
       <driver name='qemu' type='raw'/>
       <source file='{iso_path}'/>
       <target dev='sda' bus='sata'/>
       <readonly/>
+      <boot order='1'/>
+    </disk>
+    <disk type='file' device='disk'>
+      <driver name='qemu' type='qcow2' cache='none'/>
+      <source file='{disk_path}'/>
+      <target dev='vda' bus='virtio'/>
       <boot order='2'/>
     </disk>{extra_disks_xml}
     {iface_xml}
@@ -1412,26 +1385,23 @@ def _run_deploy(job_id: str, cfg: dict):
                  f'Only {len(registered)} registered.')
             return
 
-        # Build MAC → vm_name reverse lookup (used in pending-user-action handler below)
-        mac_to_vm: dict = {mac.lower(): vm for vm, mac in mac_map.items()}
-
         # Set host roles + hostnames for multi-node.
         # Match each registered host to its VM via MAC address so the hostname
         # in OpenShift matches the libvirt VM name exactly.
         if not is_sno:
-            phase('Assigning node roles & hostnames', 55)
+            phase('Assigning node roles', 55)
             token = _get_access_token(cfg['offline_token'])
             r = _ai('GET', f'/clusters/{cluster_id}/hosts', token)
             hosts = r.json()
 
-            # mac_to_vm already built above
+            # Build MAC → vm_name lookup from mac_map
+            mac_to_vm = {mac.lower(): vm for vm, mac in mac_map.items()}
 
             # Sort hosts by discovery time for stable fallback ordering
             hosts_sorted = sorted(hosts, key=lambda h: h.get('created_at', ''))
 
             for idx, host in enumerate(hosts_sorted):
-                host_id    = host['id']
-                url        = f'/infra-envs/{infra_env_id}/hosts/{host_id}'
+                host_id = host['id']
 
                 # inventory is a JSON string in the API response — parse it first
                 raw_inv = host.get('inventory') or '{}'
@@ -1452,93 +1422,28 @@ def _run_deploy(job_id: str, cfg: dict):
                         break
 
                 vm_name = mac_to_vm.get(host_mac) if host_mac else None
-                matched = 'MAC' if host_mac else 'index fallback'
 
                 # Fallback: assign by index if MAC didn't match
                 if not vm_name and idx < len(vm_names):
                     vm_name = vm_names[idx]
-                    if not host_mac:
-                        log(f'  ⚠ Host {host_id[:8]}: MAC not matched — using index {idx} → {vm_name}', 'warn')
 
                 role = 'worker' if (vm_name in vm_names[n_control:]) else 'master'
+                url  = f'/infra-envs/{infra_env_id}/hosts/{host_id}'
 
-                # ── Assign role ───────────────────────────────────────────────
                 try:
                     _ai('PATCH', url, token, {'host_role': role})
-                    log(f'  Role: {vm_name or host_id[:8]} → {role} ({matched})')
+                    matched = 'MAC matched' if host_mac else 'index fallback'
+                    log(f'  Set {vm_name or host_id[:8]} → {role} ({matched})')
                 except Exception as e:
-                    log(f'  Role assignment warning for {host_id[:8]}: {e}', 'warn')
+                    log(f'  Role assignment warning: {e}', 'warn')
 
-                # ── Assign hostname (with retries) ────────────────────────────
                 if vm_name:
-                    assigned = False
-                    for attempt in range(3):
-                        try:
-                            resp = _ai('PATCH', url, token, {'requested_hostname': vm_name})
-                            if resp.status_code < 300:
-                                log(f'  Hostname: {host.get("requested_hostname") or host_id[:8]} → {vm_name} ✓')
-                                assigned = True
-                                break
-                            else:
-                                log(f'  Hostname PATCH attempt {attempt+1} returned {resp.status_code}: {resp.text[:120]}', 'warn')
-                        except Exception as e:
-                            log(f'  Hostname PATCH attempt {attempt+1} error: {e}', 'warn')
-                        time.sleep(5)
-                    if not assigned:
-                        log(f'  ⚠ Could not set hostname for {host_id[:8]} → {vm_name} after 3 attempts', 'warn')
-
-        # ── Step 7a: Verify hostnames are set ────────────────────────────────
-        # Poll until all hosts report back the requested_hostname we set.
-        # This confirms the API accepted our rename before we trigger install.
-        if not is_sno:
-            phase('Verifying hostname assignments', 58)
-            log('  Waiting for hostname assignments to be confirmed by API…')
-            for _vhcheck in range(12):   # up to ~60 seconds
-                token = _get_access_token(cfg['offline_token'])
-                r = _ai('GET', f'/clusters/{cluster_id}/hosts', token)
-                current_hosts = r.json()
-                unset = [
-                    h for h in current_hosts
-                    if h.get('requested_hostname') not in vm_names
-                ]
-                if not unset:
-                    log(f'  All {len(current_hosts)} hostnames confirmed ✓')
-                    # Log the final hostname mapping
-                    for h in sorted(current_hosts, key=lambda x: x.get('requested_hostname', '')):
-                        disc = (h.get('inventory') and
-                                json.loads(h['inventory']).get('hostname', '') or h['id'][:8]
-                                if isinstance(h.get('inventory'), str) else h['id'][:8])
-                        log(f'  {disc} → {h.get("requested_hostname")}')
-                    break
-                names_pending = [h.get('requested_hostname') or h['id'][:8] for h in unset]
-                log(f'  {len(unset)} host(s) still showing old hostname: {names_pending} — retrying…')
-                # Re-patch the ones that didn't take
-                for h in unset:
-                    h_id = h['id']
-                    url  = f'/infra-envs/{infra_env_id}/hosts/{h_id}'
-                    # Re-match by MAC to find the right vm_name
-                    raw_inv = h.get('inventory') or '{}'
                     try:
-                        inv = json.loads(raw_inv) if isinstance(raw_inv, str) else raw_inv
+                        _ai('PATCH', url, token, {'requested_hostname': vm_name})
                     except Exception:
-                        inv = {}
-                    nics = inv.get('interfaces') or inv.get('nics') or []
-                    vm_name = None
-                    for nic in nics:
-                        mac = (nic.get('mac_address') or nic.get('macAddress') or '').lower()
-                        if mac in mac_to_vm:
-                            vm_name = mac_to_vm[mac]
-                            break
-                    if vm_name:
-                        try:
-                            _ai('PATCH', url, token, {'requested_hostname': vm_name})
-                        except Exception:
-                            pass
-                time.sleep(5)
-            else:
-                log('  ⚠ Some hosts may still show auto-discovered hostnames in console (non-fatal)', 'warn')
+                        pass  # hostname rename may be rejected once host is in known state
 
-        # ── Step 7b: Start installation ───────────────────────────────────────
+        # ── Step 7: Start installation ────────────────────────────────────────
         phase('Starting OpenShift installation', 60)
         try:
             token = _get_access_token(cfg['offline_token'])
@@ -1557,15 +1462,9 @@ def _run_deploy(job_id: str, cfg: dict):
         phase('Installing OpenShift', 65)
         log('Installation in progress — this takes 45–90 minutes…')
         deadline = time.time() + 2 * 3600  # 2 hours
-
-        last_status      = ''
-        last_pct         = 0
-        pending_handled  = set()          # host_ids handled for pending-user-action
-
-        # ── Per-host / operator state trackers ────────────────────────────────
-        node_stage_cache:   dict = {}     # host_id → current_stage
-        node_stuck_warned:  dict = {}     # host_id → last_warned timestamp
-        operator_cache:     dict = {}     # operator_name → status
+        last_status    = ''
+        last_pct       = 0
+        pending_handled = set()  # track hosts already handled for pending-user-action
 
         PHASE_PCT = {
             'preparing-for-installation':     65,
@@ -1576,15 +1475,6 @@ def _run_deploy(job_id: str, cfg: dict):
             'installed':                      100,
         }
 
-        # Adaptive poll interval per cluster status
-        POLL_INTERVAL = {
-            'preparing-for-installation':     30,
-            'installing':                     15,
-            'installing-in-progress':         15,
-            'installing-pending-user-action': 10,
-            'finalizing':                     20,
-        }
-
         consecutive_errors = 0
 
         while time.time() < deadline:
@@ -1593,163 +1483,67 @@ def _run_deploy(job_id: str, cfg: dict):
                 log('Deployment stopped by reset request.', 'warn')
                 return
             try:
-                token        = _get_access_token(cfg['offline_token'])
-                r            = _ai('GET', f'/clusters/{cluster_id}', token)
+                token = _get_access_token(cfg['offline_token'])
+                r = _ai('GET', f'/clusters/{cluster_id}', token)
                 cluster_data = r.json()
-                status       = cluster_data.get('status', '')
-                status_info  = cluster_data.get('status_info', '')
-                install_pct  = cluster_data.get('progress', {}).get('total_percentage', 0)
+                status      = cluster_data.get('status', '')
+                status_info = cluster_data.get('status_info', '')
+                install_pct = cluster_data.get('progress', {}).get('total_percentage', 0)
 
-                consecutive_errors = 0
+                consecutive_errors = 0  # reset on success
 
-                # ── Cluster-level status update ────────────────────────────────
                 if status != last_status or install_pct != last_pct:
                     log(f'  Status: {status} ({install_pct}%) — {status_info}')
-                    if status != last_status:
-                        _job_event(job_id, 'status_change', status=status, info=status_info)
                     last_status = status
                     last_pct    = install_pct
                     pct = PHASE_PCT.get(status, 70) + int(install_pct * 0.25)
                     _job_set(job_id, progress=min(pct, 98))
 
-                # ── Parse monitored operators ──────────────────────────────────
-                monitored_ops = cluster_data.get('monitored_operators') or []
-                if monitored_ops:
-                    ops_out = []
-                    for op in monitored_ops:
-                        op_name   = op.get('name', '')
-                        op_status = op.get('status', '') or 'unknown'
-                        op_info   = (op.get('status_info') or '')[:100]
-                        ops_out.append({'name': op_name, 'status': op_status, 'info': op_info})
-                        # Emit event when operator first becomes available
-                        if op_status == 'available' and operator_cache.get(op_name) != 'available':
-                            _job_event(job_id, 'operator_available', name=op_name)
-                            log(f'  ✓ Operator available: {op_name}')
-                        elif op_status not in ('', 'unknown') and op_status != operator_cache.get(op_name):
-                            _job_event(job_id, 'operator_update', name=op_name, status=op_status)
-                        operator_cache[op_name] = op_status
-                    _job_set(job_id, ai_operators=ops_out)
-
                 if status == 'installed':
                     break
                 if status in ('error', 'cancelled'):
-                    # Collect per-host failure details before failing
-                    try:
-                        hr_fail = _ai('GET', f'/clusters/{cluster_id}/hosts', token)
-                        for hf in hr_fail.json():
-                            hf_status = hf.get('status', '')
-                            hf_name   = hf.get('requested_hostname') or hf['id'][:8]
-                            hf_info   = hf.get('status_info', '')
-                            if 'error' in hf_status or 'failed' in hf_status:
-                                log(f'  ✗ {hf_name}: {hf_status} — {hf_info}', 'error')
-                                _job_event(job_id, 'host_failed', node=hf_name,
-                                           status=hf_status, info=hf_info)
-                    except Exception:
-                        pass
                     fail(f'Installation {status}: {status_info}')
                     return
 
-                # ── Per-host tracking (stage progress + stuck + pending-user-action) ──
+                # ── Check for pending-user-action on individual hosts ──────────
+                # Happens when a host rebooted back into the ISO instead of disk.
+                # Re-eject CDROM and reboot to recover automatically.
                 try:
-                    hr   = _ai('GET', f'/clusters/{cluster_id}/hosts', token)
-                    hosts_now = hr.json()
-                    now_ts = time.time()
-                    nodes_out = []
-
-                    for h in hosts_now:
-                        h_id      = h.get('id', '')
-                        hostname  = h.get('requested_hostname') or h_id[:8]
-                        h_status  = h.get('status', '')
-
-                        # Match to libvirt VM name
-                        vm_match = _parse_host_mac(h, mac_to_vm)
-                        if not vm_match:
+                    hr = _ai('GET', f'/clusters/{cluster_id}/hosts', token)
+                    for h in hr.json():
+                        h_status = h.get('status', '')
+                        h_id     = h.get('id', '')
+                        hostname = h.get('requested_hostname') or h_id[:8]
+                        if 'pending-user-action' in h_status and h_id not in pending_handled:
+                            # Match API hostname back to actual libvirt VM name.
                             vm_match = next(
                                 (v for v in vm_names
                                  if v == hostname or hostname.startswith(v) or v in hostname),
                                 None
-                            ) or hostname
-
-                        role = 'worker' if vm_match in vm_names[n_control:] else 'master'
-
-                        # Parse host progress
-                        prog         = h.get('progress') or {}
-                        stage        = prog.get('current_stage') or ''
-                        stage_pct    = prog.get('installation_percentage') or 0
-                        stage_upd    = prog.get('stage_updated_at') or ''
-
-                        # ── Stage change detection ─────────────────────────────
-                        prev_stage = node_stage_cache.get(h_id)
-                        if stage and stage != prev_stage:
-                            if prev_stage is not None:
-                                log(f'  {vm_match}: {prev_stage or "—"} → {stage}')
-                            _job_event(job_id, 'stage_change', node=vm_match,
-                                       from_stage=prev_stage or '', to_stage=stage)
-                            node_stage_cache[h_id] = stage
-
-                        # ── Stuck node detection ───────────────────────────────
-                        stuck     = False
-                        stuck_min = 0
-                        if stage_upd and stage not in ('Done', 'Joined', 'Rebooting', ''):
-                            try:
-                                from datetime import datetime, timezone
-                                upd_dt    = datetime.fromisoformat(stage_upd.replace('Z', '+00:00'))
-                                elapsed_s = (datetime.now(timezone.utc) - upd_dt).total_seconds()
-                                stuck_min = int(elapsed_s / 60)
-                                stuck     = elapsed_s > 900   # 15 min threshold
-                                if stuck:
-                                    last_warned = node_stuck_warned.get(h_id, 0)
-                                    if now_ts - last_warned > 600:  # warn at most every 10 min
-                                        log(f'  ⚠ {vm_match} stuck on "{stage}" for {stuck_min} min', 'warn')
-                                        _job_event(job_id, 'stuck', node=vm_match,
-                                                   stage=stage, minutes=stuck_min)
-                                        node_stuck_warned[h_id] = now_ts
-                            except Exception:
-                                pass
-
-                        nodes_out.append({
-                            'id':          h_id,
-                            'name':        vm_match,
-                            'role':        role,
-                            'status':      h_status,
-                            'stage':       stage,
-                            'stage_pct':   stage_pct,
-                            'stage_upd':   stage_upd,
-                            'stuck':       stuck,
-                            'stuck_min':   stuck_min,
-                            'status_info': h.get('status_info') or '',
-                        })
-
-                        # ── Pending-user-action recovery ───────────────────────
-                        if 'pending-user-action' not in h_status or h_id in pending_handled:
-                            continue
-                        if not vm_match or vm_match == hostname:
-                            log(f'  ⚠ {hostname} pending-user-action but VM not identified — skipping reboot', 'warn')
+                            )
+                            if not vm_match:
+                                log(f'  ⚠ Host {hostname} pending-user-action but VM not identified — skipping reboot', 'warn')
+                                pending_handled.add(h_id)
+                                continue
+                            log(f'  ⚠ Host {hostname} rebooted into ISO — ejecting and rebooting {vm_match}…', 'warn')
+                            _eject_cdroms([vm_match], log)
+                            time.sleep(2)
+                            _reboot_vms([vm_match], log)
                             pending_handled.add(h_id)
-                            continue
-                        log(f'  ⚠ {vm_match} rebooted into ISO — ejecting and rebooting…', 'warn')
-                        _job_event(job_id, 'pending_user_action', node=vm_match)
-                        _eject_cdroms([vm_match], log)
-                        time.sleep(2)
-                        _reboot_vms([vm_match], log)
-                        pending_handled.add(h_id)
-
-                    _job_set(job_id, nodes=nodes_out)
-
-                except Exception as host_err:
-                    log(f'  Host tracking error (non-fatal): {host_err}', 'warn')
+                except Exception:
+                    pass  # don't fail monitoring on host-check errors
 
             except Exception as e:
                 consecutive_errors += 1
                 if consecutive_errors == 1:
                     log(f'  Monitoring error (retrying): {e}', 'warn')
                 elif consecutive_errors % 5 == 0:
-                    log(f'  Still unreachable after {consecutive_errors} attempts', 'warn')
+                    log(f'  Still unreachable after {consecutive_errors} attempts — installation continues on VMs', 'warn')
                 wait = min(30 * (2 ** min(consecutive_errors - 1, 4)), 300)
                 time.sleep(wait)
                 continue
 
-            time.sleep(POLL_INTERVAL.get(status, 30))
+            time.sleep(30)
         else:
             fail('Installation timed out after 2 hours.')
             return
@@ -1902,21 +1696,12 @@ def _monitor_install_thread(job_id: str, cfg: dict, cluster_id: str):
 
     try:
         deadline = time.time() + 2 * 3600
-        last_status  = ''
-        last_pct     = 0
-        pending_last_handled: dict = {}   # host_id → last handled timestamp
-        node_stage_cache:     dict = {}
-        node_stuck_warned:    dict = {}
-        operator_cache:       dict = {}
+        last_status = ''
+        last_pct    = 0
+        # host_id → last_handled timestamp; persists logic across tight loops
+        # (restarts reset this, but 5-min cooldown prevents immediate re-trigger)
+        pending_last_handled: dict = {}
         consecutive_errors  = 0
-
-        POLL_INTERVAL = {
-            'preparing-for-installation':     30,
-            'installing':                     15,
-            'installing-in-progress':         15,
-            'installing-pending-user-action': 10,
-            'finalizing':                     20,
-        }
 
         while time.time() < deadline:
             if job_id in _stop_jobs:
@@ -1924,39 +1709,21 @@ def _monitor_install_thread(job_id: str, cfg: dict, cluster_id: str):
                 log('Monitoring stopped by reset request.', 'warn')
                 return
             try:
-                token        = _get_access_token(cfg['offline_token'])
-                r            = _ai('GET', f'/clusters/{cluster_id}', token)
+                token = _get_access_token(cfg['offline_token'])
+                r = _ai('GET', f'/clusters/{cluster_id}', token)
                 cluster_data = r.json()
-                status       = cluster_data.get('status', '')
-                status_info  = cluster_data.get('status_info', '')
-                install_pct  = cluster_data.get('progress', {}).get('total_percentage', 0)
+                status      = cluster_data.get('status', '')
+                status_info = cluster_data.get('status_info', '')
+                install_pct = cluster_data.get('progress', {}).get('total_percentage', 0)
                 consecutive_errors = 0
 
                 if status != last_status or install_pct != last_pct:
                     log(f'  Status: {status} ({install_pct}%) — {status_info}')
-                    if status != last_status:
-                        _job_event(job_id, 'status_change', status=status, info=status_info)
                     last_status = status
                     last_pct    = install_pct
                     pct = PHASE_PCT.get(status, 70) + int(install_pct * 0.25)
                     _job_set(job_id, progress=min(pct, 98),
                              phase=f'Installing OpenShift ({install_pct}%)')
-
-                # ── Operators ─────────────────────────────────────────────────
-                for op in (cluster_data.get('monitored_operators') or []):
-                    op_name   = op.get('name', '')
-                    op_status = op.get('status', '') or 'unknown'
-                    if op_status == 'available' and operator_cache.get(op_name) != 'available':
-                        _job_event(job_id, 'operator_available', name=op_name)
-                        log(f'  ✓ Operator available: {op_name}')
-                    operator_cache[op_name] = op_status
-                ops_out = [
-                    {'name': op.get('name',''), 'status': op.get('status','') or 'unknown',
-                     'info': (op.get('status_info') or '')[:100]}
-                    for op in (cluster_data.get('monitored_operators') or [])
-                ]
-                if ops_out:
-                    _job_set(job_id, ai_operators=ops_out)
 
                 if status == 'installed':
                     _collect_credentials(job_id, cluster_id, cluster_name, base_domain, token)
@@ -1966,84 +1733,54 @@ def _monitor_install_thread(job_id: str, cfg: dict, cluster_id: str):
                     log(f'Installation {status}: {status_info}', 'error')
                     return
 
-                # ── Per-host: node tracking + pending-user-action ──────────────
+                # Auto-recover per-host pending-user-action.
+                # Match by MAC so we only eject/reboot the specific VM that needs it.
+                # 5-minute cooldown per host prevents re-triggering on service restart.
                 try:
-                    hr      = _ai('GET', f'/clusters/{cluster_id}/hosts', token)
-                    now_ts  = time.time()
-                    nodes_out = []
-
+                    hr = _ai('GET', f'/clusters/{cluster_id}/hosts', token)
+                    now = time.time()
                     for h in hr.json():
+                        h_status = h.get('status', '')
                         h_id     = h.get('id', '')
                         hostname = h.get('requested_hostname') or h_id[:8]
-                        h_status = h.get('status', '')
-
-                        vm_match = _parse_host_mac(h, mac_to_vm) or next(
-                            (v for v in vm_names
-                             if v == hostname or hostname.startswith(v) or v in hostname),
-                            None
-                        ) or hostname
-
-                        prog      = h.get('progress') or {}
-                        stage     = prog.get('current_stage') or ''
-                        stage_pct = prog.get('installation_percentage') or 0
-                        stage_upd = prog.get('stage_updated_at') or ''
-
-                        # Stage change
-                        prev = node_stage_cache.get(h_id)
-                        if stage and stage != prev:
-                            if prev is not None:
-                                log(f'  {vm_match}: {prev or "—"} → {stage}')
-                            _job_event(job_id, 'stage_change', node=vm_match,
-                                       from_stage=prev or '', to_stage=stage)
-                            node_stage_cache[h_id] = stage
-
-                        # Stuck detection
-                        stuck     = False
-                        stuck_min = 0
-                        if stage_upd and stage not in ('Done', 'Joined', 'Rebooting', ''):
-                            try:
-                                from datetime import datetime, timezone
-                                upd_dt    = datetime.fromisoformat(stage_upd.replace('Z', '+00:00'))
-                                elapsed_s = (datetime.now(timezone.utc) - upd_dt).total_seconds()
-                                stuck_min = int(elapsed_s / 60)
-                                stuck     = elapsed_s > 900
-                                if stuck:
-                                    last_w = node_stuck_warned.get(h_id, 0)
-                                    if now_ts - last_w > 600:
-                                        log(f'  ⚠ {vm_match} stuck on "{stage}" for {stuck_min} min', 'warn')
-                                        _job_event(job_id, 'stuck', node=vm_match,
-                                                   stage=stage, minutes=stuck_min)
-                                        node_stuck_warned[h_id] = now_ts
-                            except Exception:
-                                pass
-
-                        nodes_out.append({
-                            'id': h_id, 'name': vm_match, 'role':
-                            'worker' if vm_match in vm_names[len(vm_names)-len([v for v in vm_names if 'worker' in v]):] else 'master',
-                            'status': h_status, 'stage': stage,
-                            'stage_pct': stage_pct, 'stage_upd': stage_upd,
-                            'stuck': stuck, 'stuck_min': stuck_min,
-                            'status_info': h.get('status_info') or '',
-                        })
-
-                        # pending-user-action with 5-min cooldown
                         if 'pending-user-action' not in h_status:
                             continue
-                        if now_ts - pending_last_handled.get(h_id, 0) < 300:
+                        last_t = pending_last_handled.get(h_id, 0)
+                        if now - last_t < 300:   # 5-min cooldown
                             continue
-                        if not vm_match or vm_match == hostname:
-                            log(f'  ⚠ {hostname} pending-user-action but VM not identified — skipping', 'warn')
-                            pending_last_handled[h_id] = now_ts
+                        # Find the libvirt VM name via MAC address
+                        # inventory is a JSON string in the API — parse it
+                        raw_inv = h.get('inventory') or '{}'
+                        if isinstance(raw_inv, str):
+                            try:
+                                inv = json.loads(raw_inv)
+                            except Exception:
+                                inv = {}
+                        else:
+                            inv = raw_inv
+                        nics = inv.get('interfaces') or inv.get('nics') or []
+                        vm_match = None
+                        for nic in nics:
+                            mac = (nic.get('mac_address') or nic.get('macAddress') or '').lower()
+                            if mac in mac_to_vm:
+                                vm_match = mac_to_vm[mac]
+                                break
+                        # Fallback: match by hostname string
+                        if not vm_match:
+                            vm_match = next(
+                                (v for v in vm_names
+                                 if v == hostname or hostname.startswith(v) or v in hostname),
+                                None
+                            )
+                        if not vm_match:
+                            log(f'  ⚠ Host {hostname} pending-user-action but VM not identified — skipping reboot (manual intervention may be needed)', 'warn')
+                            pending_last_handled[h_id] = now
                             continue
-                        log(f'  ⚠ {vm_match} rebooted into ISO — ejecting and rebooting…', 'warn')
-                        _job_event(job_id, 'pending_user_action', node=vm_match)
+                        log(f'  ⚠ Host {hostname} rebooted into ISO — ejecting and rebooting {vm_match}…', 'warn')
                         _eject_cdroms([vm_match], log)
                         time.sleep(2)
                         _reboot_vms([vm_match], log)
-                        pending_last_handled[h_id] = now_ts
-
-                    _job_set(job_id, nodes=nodes_out)
-
+                        pending_last_handled[h_id] = now
                 except Exception:
                     pass
 
@@ -2055,7 +1792,7 @@ def _monitor_install_thread(job_id: str, cfg: dict, cluster_id: str):
                 time.sleep(wait)
                 continue
 
-            time.sleep(POLL_INTERVAL.get(status, 30))
+            time.sleep(30)
         else:
             _job_set(job_id, status='failed', phase='Failed')
             log('Installation monitoring timed out after 2 hours.', 'error')
