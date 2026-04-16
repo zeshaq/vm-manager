@@ -42,6 +42,17 @@ _lock               = threading.Lock()
 _running_jobs: set  = set()
 _stop_jobs:    set  = set()
 
+# ── Task definitions (order matters — matches deployment pipeline) ─────────────
+AGENT_TASKS = [
+    {'id': 'binary',    'name': 'Locate / download openshift-install binary'},
+    {'id': 'config',    'name': 'Generate configuration files'},
+    {'id': 'iso',       'name': 'Build agent ISO'},
+    {'id': 'vms',       'name': 'Create virtual machines'},
+    {'id': 'bootstrap', 'name': 'Wait for bootstrap complete'},
+    {'id': 'install',   'name': 'Install OpenShift'},
+    {'id': 'creds',     'name': 'Collect credentials & kubeconfig'},
+]
+
 # ── Job persistence ───────────────────────────────────────────────────────────
 
 def _load_jobs():
@@ -77,6 +88,75 @@ def _job_set(job_id: str, **kw):
         if job_id in _jobs:
             _jobs[job_id].update(kw)
             _save_jobs()
+
+# ── Task tracking helpers ─────────────────────────────────────────────────────
+
+def _fresh_tasks() -> list:
+    return [
+        {'id': t['id'], 'name': t['name'], 'status': 'pending',
+         'started_at': None, 'completed_at': None, 'detail': ''}
+        for t in AGENT_TASKS
+    ]
+
+def _init_tasks(job_id: str):
+    with _lock:
+        if job_id not in _jobs:
+            return
+        _jobs[job_id]['tasks'] = _fresh_tasks()
+        _save_jobs()
+
+def _task_start(job_id: str, task_id: str, detail: str = ''):
+    with _lock:
+        if job_id not in _jobs:
+            return
+        tasks = _jobs[job_id].setdefault('tasks', _fresh_tasks())
+        for t in tasks:
+            if t['id'] == task_id:
+                t['status']     = 'running'
+                t['started_at'] = time.strftime('%H:%M:%S')
+                if detail:
+                    t['detail'] = detail
+                break
+        _save_jobs()
+
+def _task_done(job_id: str, task_id: str, detail: str = ''):
+    with _lock:
+        if job_id not in _jobs:
+            return
+        for t in _jobs[job_id].get('tasks', []):
+            if t['id'] == task_id:
+                t['status']       = 'done'
+                t['completed_at'] = time.strftime('%H:%M:%S')
+                if detail:
+                    t['detail'] = detail
+                break
+        _save_jobs()
+
+def _task_fail(job_id: str, task_id: str, detail: str = ''):
+    with _lock:
+        if job_id not in _jobs:
+            return
+        for t in _jobs[job_id].get('tasks', []):
+            if t['id'] == task_id:
+                t['status']       = 'failed'
+                t['completed_at'] = time.strftime('%H:%M:%S')
+                if detail:
+                    t['detail'] = detail
+                break
+        _save_jobs()
+
+def _task_skip(job_id: str, task_id: str, detail: str = ''):
+    with _lock:
+        if job_id not in _jobs:
+            return
+        for t in _jobs[job_id].get('tasks', []):
+            if t['id'] == task_id:
+                t['status']       = 'skipped'
+                t['completed_at'] = time.strftime('%H:%M:%S')
+                if detail:
+                    t['detail'] = detail
+                break
+        _save_jobs()
 
 # ── Auth helper ───────────────────────────────────────────────────────────────
 
@@ -545,18 +625,22 @@ def _run_agent_deploy(job_id: str, cfg: dict):
 
         # ── Step 1: Find or download openshift-install ────────────────────────
         phase('Locating openshift-install binary', 5)
+        _task_start(job_id, 'binary')
         binary = _find_oi_binary(ocp_version)
         if not binary:
             if ocp_version:
                 log(f'  openshift-install {ocp_version} not found — downloading…')
                 binary = _download_oi_binary(ocp_version, log)
             if not binary:
+                _task_fail(job_id, 'binary', 'Binary not found and download failed')
                 fail('openshift-install binary not found. Place it in '
                      f'{WORK_DIR}/bin/{ocp_version or ""}/openshift-install '
                      'or ensure it is in PATH.')
                 return
-        log(f'  Using binary: {binary} ({_oi_version(binary)})')
+        ver_str = _oi_version(binary)
+        log(f'  Using binary: {binary} ({ver_str})')
         _job_set(job_id, binary=str(binary))
+        _task_done(job_id, 'binary', f'{binary.name} {ver_str}')
 
         # Build a PATH that includes the binary's directory so that
         # openshift-install can find `oc` (required for ISO creation)
@@ -581,6 +665,7 @@ def _run_agent_deploy(job_id: str, cfg: dict):
         # We only need to write them if the ISO hasn't been built yet.
         # State for wait-for commands is in .openshift_install_state.json (created by ISO build).
         phase('Generating install-config.yaml', 10)
+        _task_start(job_id, 'config')
         state_json = install_dir / '.openshift_install_state.json'
         if not saved_iso or not state_json.exists():
             ic_path = install_dir / 'install-config.yaml'
@@ -599,8 +684,10 @@ def _run_agent_deploy(job_id: str, cfg: dict):
                 log('  Install state missing — ISO must be rebuilt', 'warn')
                 _job_set(job_id, iso_path=None)
                 saved_iso = None
+            _task_done(job_id, 'config', f'{len(nodes_cfg)} node(s) configured')
         else:
             log('  Resuming: config files already processed ✓')
+            _task_skip(job_id, 'config', 'Resumed — already done')
 
         # ── Step 3: Build agent ISO ───────────────────────────────────────────
         iso_path = Path(saved_iso) if saved_iso and Path(saved_iso).exists() else None
@@ -626,6 +713,7 @@ def _run_agent_deploy(job_id: str, cfg: dict):
 
         if not iso_path:
             phase('Building agent ISO', 15)
+            _task_start(job_id, 'iso', 'Running openshift-install agent create image…')
             log('  Running: openshift-install agent create image…')
             log('  (This may take 2–5 minutes)')
             result = subprocess.run(
@@ -634,6 +722,7 @@ def _run_agent_deploy(job_id: str, cfg: dict):
                 env=sub_env,
             )
             if result.returncode != 0:
+                _task_fail(job_id, 'iso', 'ISO creation failed')
                 fail(f'ISO creation failed:\n{result.stderr[-500:]}')
                 return
 
@@ -668,10 +757,15 @@ def _run_agent_deploy(job_id: str, cfg: dict):
                 except Exception as perm_err:
                     log(f'  Warning: could not set ISO permissions: {perm_err}', 'warn')
 
+            iso_mb = iso_path.stat().st_size // 1_048_576
             _job_set(job_id, iso_path=str(iso_path))
+            _task_done(job_id, 'iso', f'{iso_path.name} ({iso_mb} MB)')
+        else:
+            _task_skip(job_id, 'iso', f'Resumed — ISO already at {iso_path}')
 
         # ── Step 4: Create VMs ────────────────────────────────────────────────
         phase('Creating virtual machines', 30)
+        _task_start(job_id, 'vms', f'Creating {len(nodes_cfg)} VM(s)…')
         if not saved_vms:
             # Resolve network name → actual bridge and validate it exists
             bridge            = _resolve_bridge(network)
@@ -734,6 +828,7 @@ def _run_agent_deploy(job_id: str, cfg: dict):
                     conn.close()
                 except Exception:
                     pass
+                _task_fail(job_id, 'vms', str(e))
                 fail(f'VM creation failed: {e}')
                 return
 
@@ -742,8 +837,10 @@ def _run_agent_deploy(job_id: str, cfg: dict):
             except Exception:
                 pass
             _job_set(job_id, vms=created_vms)
+            _task_done(job_id, 'vms', f'{len(created_vms)} VM(s) running')
         else:
             log(f'  Resuming: {len(saved_vms)} VMs already exist ✓')
+            _task_skip(job_id, 'vms', f'Resumed — {len(saved_vms)} VMs already exist')
 
         # ── Step 5: Wait for bootstrap ────────────────────────────────────────
         if job_id in _stop_jobs:
@@ -752,6 +849,7 @@ def _run_agent_deploy(job_id: str, cfg: dict):
             return
 
         phase('Waiting for bootstrap complete', 45)
+        _task_start(job_id, 'bootstrap', 'Nodes booting from ISO — takes 10–30 min')
         log('  Running: openshift-install agent wait-for bootstrap-complete')
         log('  (Nodes are booting from ISO — takes 10–30 min)')
 
@@ -780,9 +878,11 @@ def _run_agent_deploy(job_id: str, cfg: dict):
 
         bootstrap_proc.wait()
         if bootstrap_proc.returncode != 0:
+            _task_fail(job_id, 'bootstrap', f'Bootstrap failed (exit {bootstrap_proc.returncode})')
             fail(f'Bootstrap failed (exit {bootstrap_proc.returncode})')
             return
         log('Bootstrap complete ✓')
+        _task_done(job_id, 'bootstrap', 'Bootstrap complete')
 
         # ── Step 6: Wait for install complete ────────────────────────────────
         if job_id in _stop_jobs:
@@ -791,6 +891,7 @@ def _run_agent_deploy(job_id: str, cfg: dict):
             return
 
         phase('Installing OpenShift', 70)
+        _task_start(job_id, 'install', 'Installing OpenShift cluster — takes 30–90 min')
         log('  Running: openshift-install agent wait-for install-complete')
         log('  (Takes 30–90 minutes)')
 
@@ -818,11 +919,14 @@ def _run_agent_deploy(job_id: str, cfg: dict):
 
         install_proc.wait()
         if install_proc.returncode != 0:
+            _task_fail(job_id, 'install', f'Installation failed (exit {install_proc.returncode})')
             fail(f'Installation failed (exit {install_proc.returncode})')
             return
+        _task_done(job_id, 'install', 'OpenShift installed successfully')
 
         # ── Step 7: Collect credentials ───────────────────────────────────────
         phase('Collecting credentials', 97)
+        _task_start(job_id, 'creds', 'Reading kubeconfig and kubeadmin-password…')
         kc_src  = install_dir / 'auth' / 'kubeconfig'
         pwd_src = install_dir / 'auth' / 'kubeadmin-password'
         result  = {}
@@ -843,6 +947,7 @@ def _run_agent_deploy(job_id: str, cfg: dict):
         result['api_url']     = f'https://api.{cluster_name}.{base_domain}:6443'
         result['console_url'] = f'https://console-openshift-console.apps.{cluster_name}.{base_domain}'
 
+        _task_done(job_id, 'creds', result.get('console_url', ''))
         _job_set(job_id, result=result, status='complete', progress=100, phase='Complete')
         log(f'OpenShift installation complete! 🎉')
         log(f'Console: {result["console_url"]}')
@@ -1150,6 +1255,7 @@ def deploy():
             'created':  created,
             'config':   data,
             'logs':     [],
+            'tasks':    _fresh_tasks(),
         }
         _save_jobs()
 

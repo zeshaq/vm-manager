@@ -6,6 +6,7 @@ import {
   AlertTriangle, ChevronDown, ChevronRight,
   Trash2, Search, ChevronsDown, Maximize2, Minimize2,
   Binary, Settings, Disc3, Cpu, Package, Trophy, X,
+  Clock, SkipForward, ListChecks,
 } from 'lucide-react'
 import api from '../api'
 
@@ -57,6 +58,169 @@ function StepTimeline({ progress, isComplete, isFailed }) {
                   progress > step.max ? 'bg-green-500/40' : 'bg-navy-600'
                 }`} />
               )}
+            </div>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
+// ── Task table ────────────────────────────────────────────────────────────────
+
+const TASK_STATUS_CFG = {
+  pending:  { icon: Clock,        color: 'text-slate-500',  bg: 'bg-slate-700/30',   label: 'Pending'     },
+  running:  { icon: Loader2,      color: 'text-sky-400',    bg: 'bg-sky-500/15',     label: 'Running',  spin: true },
+  done:     { icon: CheckCircle,  color: 'text-green-400',  bg: 'bg-green-500/15',   label: 'Done'        },
+  failed:   { icon: XCircle,      color: 'text-red-400',    bg: 'bg-red-500/15',     label: 'Failed'      },
+  skipped:  { icon: SkipForward,  color: 'text-slate-500',  bg: 'bg-slate-700/20',   label: 'Skipped'     },
+}
+
+function TaskStatusIcon({ status }) {
+  const cfg = TASK_STATUS_CFG[status] || TASK_STATUS_CFG.pending
+  const Icon = cfg.icon
+  return (
+    <div className={`w-6 h-6 rounded-full flex items-center justify-center flex-shrink-0 ${cfg.bg}`}>
+      <Icon size={13} className={`${cfg.color}${cfg.spin ? ' animate-spin' : ''}`} />
+    </div>
+  )
+}
+
+function TaskDuration({ startedAt, completedAt, status }) {
+  const [now, setNow] = useState(Date.now())
+  useEffect(() => {
+    if (status !== 'running') return
+    const id = setInterval(() => setNow(Date.now()), 1000)
+    return () => clearInterval(id)
+  }, [status])
+
+  if (!startedAt) return <span className="text-slate-700 text-[11px]">—</span>
+
+  // Parse HH:MM:SS from started_at
+  const parseTime = (ts) => {
+    if (!ts) return null
+    const parts = ts.split(':').map(Number)
+    if (parts.length !== 3) return null
+    return parts[0] * 3600 + parts[1] * 60 + parts[2]
+  }
+
+  const startSec = parseTime(startedAt)
+  const endSec   = completedAt ? parseTime(completedAt) : null
+
+  if (startSec === null) return <span className="text-slate-700 text-[11px]">—</span>
+
+  const todaySec = Math.floor(now / 1000) % 86400
+  const elapsedSec = endSec !== null
+    ? Math.max(0, endSec - startSec)
+    : Math.max(0, todaySec - startSec)
+
+  if (elapsedSec >= 3600) {
+    const h = Math.floor(elapsedSec / 3600)
+    const m = Math.floor((elapsedSec % 3600) / 60)
+    return <span className="text-slate-500 text-[11px] font-mono">{h}h {m}m</span>
+  }
+  if (elapsedSec >= 60) {
+    const m = Math.floor(elapsedSec / 60)
+    const s = elapsedSec % 60
+    return <span className="text-slate-500 text-[11px] font-mono">{m}m {s}s</span>
+  }
+  return <span className="text-slate-500 text-[11px] font-mono">{elapsedSec}s</span>
+}
+
+function TaskTable({ tasks }) {
+  // Show empty slate when no tasks defined yet
+  if (!tasks || tasks.length === 0) {
+    return (
+      <div className="bg-navy-800 border border-navy-600 rounded-xl overflow-hidden">
+        <div className="flex items-center gap-2 px-4 py-3 border-b border-navy-700">
+          <ListChecks size={14} className="text-sky-400" />
+          <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider">
+            Deployment Tasks
+          </span>
+        </div>
+        <div className="flex flex-col items-center justify-center py-10 text-slate-600 text-sm gap-2">
+          <ListChecks size={24} className="opacity-30" />
+          <span>No active deployment — tasks will appear here when a cluster starts building.</span>
+        </div>
+      </div>
+    )
+  }
+
+  const doneCount    = tasks.filter(t => t.status === 'done' || t.status === 'skipped').length
+  const failedCount  = tasks.filter(t => t.status === 'failed').length
+  const runningCount = tasks.filter(t => t.status === 'running').length
+
+  return (
+    <div className="bg-navy-800 border border-navy-600 rounded-xl overflow-hidden">
+      {/* Header */}
+      <div className="flex items-center gap-2 px-4 py-3 border-b border-navy-700">
+        <ListChecks size={14} className="text-sky-400" />
+        <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider">
+          Deployment Tasks
+        </span>
+        <div className="ml-auto flex items-center gap-2 text-[11px]">
+          {runningCount > 0 && (
+            <span className="flex items-center gap-1 text-sky-400">
+              <span className="w-1.5 h-1.5 bg-sky-400 rounded-full animate-pulse" />
+              {runningCount} running
+            </span>
+          )}
+          <span className="text-slate-600">{doneCount}/{tasks.length} done</span>
+          {failedCount > 0 && <span className="text-red-400">{failedCount} failed</span>}
+        </div>
+      </div>
+
+      {/* Task rows */}
+      <div className="divide-y divide-navy-700/60">
+        {tasks.map((task, idx) => {
+          const cfg = TASK_STATUS_CFG[task.status] || TASK_STATUS_CFG.pending
+          const rowBg = task.status === 'running'
+            ? 'bg-sky-500/5'
+            : task.status === 'failed'
+            ? 'bg-red-500/5'
+            : ''
+
+          return (
+            <div key={task.id} className={`flex items-center gap-3 px-4 py-3 ${rowBg}`}>
+              {/* Step number */}
+              <span className="text-[11px] text-slate-600 w-4 text-right flex-shrink-0">
+                {idx + 1}
+              </span>
+
+              {/* Status icon */}
+              <TaskStatusIcon status={task.status} />
+
+              {/* Task name */}
+              <span className={`flex-1 text-sm font-medium ${
+                task.status === 'pending' ? 'text-slate-500'
+                : task.status === 'skipped' ? 'text-slate-500'
+                : task.status === 'failed' ? 'text-red-300'
+                : task.status === 'running' ? 'text-slate-100'
+                : 'text-slate-300'
+              }`}>
+                {task.name}
+              </span>
+
+              {/* Detail */}
+              {task.detail && (
+                <span className="text-[11px] text-slate-500 font-mono max-w-[220px] truncate" title={task.detail}>
+                  {task.detail}
+                </span>
+              )}
+
+              {/* Duration */}
+              <div className="w-14 text-right flex-shrink-0">
+                <TaskDuration
+                  startedAt={task.started_at}
+                  completedAt={task.completed_at}
+                  status={task.status}
+                />
+              </div>
+
+              {/* Status badge */}
+              <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded flex-shrink-0 ${cfg.bg} ${cfg.color}`}>
+                {cfg.label}
+              </span>
             </div>
           )
         })}
@@ -422,6 +586,9 @@ export default function OcpAgentJob() {
 
       {/* Phase stepper */}
       <StepTimeline progress={progress} isComplete={isComplete} isFailed={isFailed} />
+
+      {/* Task table */}
+      <TaskTable tasks={job.tasks} />
 
       {/* Configuration (collapsible) */}
       {Object.keys(config).length > 0 && (
