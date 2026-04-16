@@ -6,7 +6,8 @@ import {
   AlertTriangle, ChevronDown, ChevronRight,
   KeyRound, Disc3, Server, Network, Cpu, Trophy, ShieldCheck,
   Upload, X, Search, ChevronsDown, Maximize2, Minimize2, RotateCcw,
-  Layers,
+  Layers, Activity, Zap, Clock, AlertCircle, SkipForward,
+  HardDrive, Radio,
 } from 'lucide-react'
 import api from '../api'
 
@@ -433,6 +434,261 @@ function DeployLog({ logs, isRunning }) {
         {warnCount  > 0 && <span className="text-yellow-500/70">⚠ {warnCount} warning{warnCount  > 1 ? 's' : ''}</span>}
         {errorCount > 0 && <span className="text-red-500/70">✕ {errorCount} error{errorCount > 1 ? 's' : ''}</span>}
         <span className="ml-auto">{pinned ? '↓ auto-scroll on' : '⏸ auto-scroll paused'}</span>
+      </div>
+    </div>
+  )
+}
+
+// ── Node stage helpers ────────────────────────────────────────────────────────
+
+const STAGE_ORDER = [
+  'Starting installation', 'Installing', 'Writing image to disk',
+  'Rebooting', 'Waiting for control plane', 'Waiting for bootkube',
+  'Configuring', 'Joined', 'Done',
+]
+
+const STAGE_PCT = {
+  'Starting installation':     5,
+  'Installing':                20,
+  'Writing image to disk':     45,
+  'Rebooting':                 65,
+  'Waiting for control plane': 75,
+  'Waiting for bootkube':      82,
+  'Configuring':               90,
+  'Joined':                    97,
+  'Done':                      100,
+}
+
+function stagePct(stage) {
+  return STAGE_PCT[stage] ?? 0
+}
+
+// ── Node Card ─────────────────────────────────────────────────────────────────
+
+function NodeCard({ node }) {
+  const isInstalled = node.status === 'installed'
+  const isFailed    = node.status?.includes('error') || node.status?.includes('failed')
+  const isPending   = node.status?.includes('pending-user-action')
+  const isActive    = !isInstalled && !isFailed
+
+  const roleBadge = node.role === 'master'
+    ? 'bg-purple-500/20 text-purple-300 border-purple-500/30'
+    : 'bg-blue-500/20 text-blue-300 border-blue-500/30'
+
+  const cardBorder = node.stuck    ? 'border-amber-500/50 bg-amber-500/5'
+    : isFailed                     ? 'border-red-500/40 bg-red-500/5'
+    : isPending                    ? 'border-sky-500/40 bg-sky-500/5'
+    : isInstalled                  ? 'border-green-500/30 bg-green-500/5'
+    :                                'border-navy-600 bg-navy-800'
+
+  const pct = isInstalled ? 100 : stagePct(node.stage)
+
+  return (
+    <div className={`rounded-xl border p-3 space-y-2.5 transition-all ${cardBorder}`}>
+      {/* Header row */}
+      <div className="flex items-center gap-2">
+        <div className={`w-6 h-6 rounded-full flex items-center justify-center flex-shrink-0 ${
+          node.stuck    ? 'bg-amber-500/20' :
+          isFailed      ? 'bg-red-500/20'   :
+          isInstalled   ? 'bg-green-500/20' :
+          isPending     ? 'bg-sky-500/20'   : 'bg-navy-700'
+        }`}>
+          {node.stuck    ? <AlertCircle size={12} className="text-amber-400" />
+          : isFailed     ? <XCircle     size={12} className="text-red-400" />
+          : isInstalled  ? <CheckCircle size={12} className="text-green-400" />
+          : isPending    ? <Radio       size={12} className="text-sky-400 animate-pulse" />
+          :                <Loader2     size={12} className="text-sky-400 animate-spin" />}
+        </div>
+        <span className="text-slate-100 text-xs font-semibold flex-1 truncate" title={node.name}>
+          {node.name}
+        </span>
+        <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded border ${roleBadge}`}>
+          {node.role === 'master' ? 'CP' : 'W'}
+        </span>
+      </div>
+
+      {/* Stage bar */}
+      <div className="space-y-1">
+        <div className="flex items-center justify-between text-[10px]">
+          <span className={`font-medium truncate max-w-[130px] ${
+            node.stuck   ? 'text-amber-300' :
+            isFailed     ? 'text-red-400'   :
+            isInstalled  ? 'text-green-400' : 'text-slate-400'
+          }`}>
+            {isInstalled ? 'Done' : (node.stage || (isActive ? 'Starting…' : node.status))}
+          </span>
+          <span className="text-slate-600 font-mono ml-1 flex-shrink-0">{pct}%</span>
+        </div>
+        <div className="w-full bg-navy-700 rounded-full h-1.5 overflow-hidden">
+          <div
+            className={`h-1.5 rounded-full transition-all duration-700 ${
+              node.stuck   ? 'bg-amber-500' :
+              isFailed     ? 'bg-red-500'   :
+              isInstalled  ? 'bg-green-500' : 'bg-sky-500'
+            }`}
+            style={{ width: `${pct}%` }}
+          />
+        </div>
+      </div>
+
+      {/* Stuck warning */}
+      {node.stuck && (
+        <div className="flex items-center gap-1 text-[10px] text-amber-400 font-medium">
+          <Clock size={10} />
+          Stuck for {node.stuck_min}min — may need manual intervention
+        </div>
+      )}
+
+      {/* Pending user action */}
+      {isPending && (
+        <div className="flex items-center gap-1 text-[10px] text-sky-400">
+          <Radio size={10} />
+          Rebooting — auto-eject in progress…
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ── Node Grid ─────────────────────────────────────────────────────────────────
+
+function NodeGrid({ nodes }) {
+  if (!nodes?.length) return null
+
+  const installed  = nodes.filter(n => n.status === 'installed').length
+  const stuck      = nodes.filter(n => n.stuck).length
+  const pending    = nodes.filter(n => n.status?.includes('pending-user-action')).length
+
+  return (
+    <div className="bg-navy-800 border border-navy-600 rounded-xl overflow-hidden">
+      <div className="flex items-center gap-2 px-4 py-3 border-b border-navy-700">
+        <Server size={14} className="text-sky-400" />
+        <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider">
+          Node Progress
+        </span>
+        <div className="ml-auto flex items-center gap-3 text-[11px]">
+          {pending > 0 && (
+            <span className="text-sky-400 flex items-center gap-1">
+              <Radio size={10} className="animate-pulse" /> {pending} rebooting
+            </span>
+          )}
+          {stuck > 0 && (
+            <span className="text-amber-400 flex items-center gap-1">
+              <AlertCircle size={10} /> {stuck} stuck
+            </span>
+          )}
+          <span className="text-slate-500">{installed}/{nodes.length} done</span>
+        </div>
+      </div>
+      <div className="p-3 grid grid-cols-2 gap-2 sm:grid-cols-3">
+        {nodes.map(n => <NodeCard key={n.id} node={n} />)}
+      </div>
+    </div>
+  )
+}
+
+// ── Operator Panel ────────────────────────────────────────────────────────────
+
+function OperatorPanel({ operators }) {
+  if (!operators?.length) return null
+
+  const available   = operators.filter(o => o.status === 'available').length
+  const progressing = operators.filter(o => o.status === 'progressing').length
+  const failed      = operators.filter(o => o.status === 'failed' || o.status === 'degraded').length
+
+  return (
+    <div className="bg-navy-800 border border-navy-600 rounded-xl overflow-hidden">
+      <div className="flex items-center gap-2 px-4 py-3 border-b border-navy-700">
+        <Zap size={14} className="text-sky-400" />
+        <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider">
+          Cluster Operators
+        </span>
+        <div className="ml-auto flex items-center gap-3 text-[11px]">
+          <span className="text-green-400">{available} available</span>
+          {progressing > 0 && <span className="text-amber-400">{progressing} progressing</span>}
+          {failed      > 0 && <span className="text-red-400">{failed} failed</span>}
+          <span className="text-slate-600">{operators.length} total</span>
+        </div>
+      </div>
+      <div className="p-3 flex flex-wrap gap-1.5">
+        {operators.map(op => {
+          const isOk   = op.status === 'available'
+          const isProg = op.status === 'progressing'
+          const isFail = op.status === 'failed' || op.status === 'degraded'
+          return (
+            <span
+              key={op.name}
+              title={op.info || op.name}
+              className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-medium border transition-all ${
+                isFail ? 'bg-red-500/15 text-red-300 border-red-500/30' :
+                isProg ? 'bg-amber-500/15 text-amber-300 border-amber-500/30' :
+                isOk   ? 'bg-green-500/10 text-green-400 border-green-500/20' :
+                         'bg-slate-500/10 text-slate-500 border-slate-600/30'
+              }`}>
+              {isFail ? '✗' : isProg ? <Loader2 size={8} className="animate-spin inline" /> : '✓'} {op.name}
+            </span>
+          )
+        })}
+      </div>
+      {/* Progress bar: available / total */}
+      <div className="px-3 pb-3">
+        <div className="w-full bg-navy-700 rounded-full h-1.5 overflow-hidden">
+          <div
+            className="h-1.5 rounded-full bg-gradient-to-r from-green-500 to-emerald-400 transition-all duration-700"
+            style={{ width: `${operators.length ? Math.round(available / operators.length * 100) : 0}%` }}
+          />
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ── Event Feed ────────────────────────────────────────────────────────────────
+
+const EVENT_CFG = {
+  status_change:       { icon: Activity,    color: 'text-sky-400',    bg: 'bg-sky-500/10',    label: e => e.status },
+  stage_change:        { icon: SkipForward, color: 'text-slate-400',  bg: 'bg-navy-700/50',   label: e => `${e.node}: ${e.from_stage || '—'} → ${e.to_stage}` },
+  operator_available:  { icon: CheckCircle, color: 'text-green-400',  bg: 'bg-green-500/10',  label: e => `Operator ready: ${e.name}` },
+  operator_update:     { icon: Zap,         color: 'text-amber-400',  bg: 'bg-amber-500/10',  label: e => `${e.name}: ${e.status}` },
+  stuck:               { icon: AlertCircle, color: 'text-amber-400',  bg: 'bg-amber-500/10',  label: e => `${e.node} stuck on "${e.stage}" for ${e.minutes}min` },
+  pending_user_action: { icon: Radio,       color: 'text-sky-400',    bg: 'bg-sky-500/10',    label: e => `${e.node}: rebooted into ISO — ejecting` },
+  host_failed:         { icon: XCircle,     color: 'text-red-400',    bg: 'bg-red-500/10',    label: e => `${e.node} failed: ${e.info || e.status}` },
+}
+
+function EventFeed({ events }) {
+  const [expanded, setExpanded] = useState(false)
+  if (!events?.length) return null
+
+  const shown = expanded ? events : events.slice(-12)
+
+  return (
+    <div className="bg-navy-800 border border-navy-600 rounded-xl overflow-hidden">
+      <div className="flex items-center gap-2 px-4 py-3 border-b border-navy-700">
+        <Activity size={14} className="text-sky-400" />
+        <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider">
+          Event Timeline
+        </span>
+        <span className="text-[11px] text-slate-600 ml-1">{events.length} events</span>
+        {events.length > 12 && (
+          <button
+            onClick={() => setExpanded(e => !e)}
+            className="ml-auto text-[11px] text-slate-500 hover:text-sky-400 transition-colors">
+            {expanded ? '↑ Show recent' : `↓ Show all ${events.length}`}
+          </button>
+        )}
+      </div>
+      <div className="divide-y divide-navy-700/40 max-h-72 overflow-y-auto">
+        {[...shown].reverse().map((ev, i) => {
+          const cfg  = EVENT_CFG[ev.type] || { icon: Activity, color: 'text-slate-400', bg: 'bg-navy-700/30', label: e => e.type }
+          const Icon = cfg.icon
+          return (
+            <div key={i} className={`flex items-start gap-3 px-4 py-2.5 ${cfg.bg} hover:brightness-110 transition-all`}>
+              <Icon size={13} className={`${cfg.color} flex-shrink-0 mt-0.5`} />
+              <span className="flex-1 text-xs text-slate-300">{cfg.label(ev)}</span>
+              <span className="text-[10px] text-slate-600 font-mono flex-shrink-0">{ev.ts}</span>
+            </div>
+          )
+        })}
       </div>
     </div>
   )
@@ -1213,6 +1469,17 @@ export default function OpenShiftJob() {
 
       {/* ── Phase timeline ───────────────────────────────────────────── */}
       <StepTimeline progress={progress} isComplete={isComplete} isFailed={isFailed} />
+
+      {/* ── Node progress grid (during + after install) ───────────────── */}
+      {progress >= 65 && <NodeGrid nodes={job.nodes} />}
+
+      {/* ── Operator panel (during finalizing + install) ──────────────── */}
+      {progress >= 65 && job.ai_operators?.length > 0 && (
+        <OperatorPanel operators={job.ai_operators} />
+      )}
+
+      {/* ── Event timeline ───────────────────────────────────────────── */}
+      {job.events?.length > 0 && <EventFeed events={job.events} />}
 
       {/* ── Sub-progress panels ──────────────────────────────────────── */}
       {(isDownloadingISO || showNodeBar || showInstallBar || (parsed?.vmsCreated > 0 && progress < 45)) && (
