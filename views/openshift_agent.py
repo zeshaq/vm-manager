@@ -432,12 +432,68 @@ def _has_nmstatectl() -> bool:
     return bool(shutil.which('nmstatectl'))
 
 
-def _agent_config(cfg: dict) -> str:
+def _nmstate_can_handle_virtual_iface(iface_name: str, sample_ip: str,
+                                       prefix_len: int, gateway: str, dns: str) -> bool:
+    """Return True if the installed nmstatectl can generate NM config for an interface
+    that does NOT currently exist on this host.
+
+    nmstate 2.x strictly requires interfaces to exist on the running system — if
+    the interface is absent it produces an empty NetworkManager config and
+    openshift-install fails with "nmstate generated an empty NetworkManager config
+    file content".  nmstate 1.x was lenient and worked fine for virtual interfaces.
+
+    We test by feeding a minimal NMState YAML for the requested interface to
+    ``nmstatectl gc`` (generate-config).  Non-empty output → static IPs are safe.
+    Empty / error → fall back to DHCP.
+    """
+    import tempfile
+    import yaml as _yaml
+
+    test_doc = {
+        'interfaces': [{
+            'name':  iface_name,
+            'type':  'ethernet',
+            'state': 'up',
+            'ipv4': {
+                'enabled': True,
+                'dhcp':    False,
+                'address': [{'ip': sample_ip, 'prefix-length': prefix_len}],
+            },
+        }],
+        'dns-resolver': {'config': {'server': [dns]}},
+        'routes': {'config': [{
+            'destination': '0.0.0.0/0',
+            'next-hop-address':   gateway,
+            'next-hop-interface': iface_name,
+            'table-id': 254,
+        }]},
+    }
+    try:
+        with tempfile.NamedTemporaryFile(
+                mode='w', suffix='.yaml', delete=False) as f:
+            _yaml.dump(test_doc, f, default_flow_style=False, sort_keys=False)
+            fname = f.name
+        try:
+            r = subprocess.run(
+                ['nmstatectl', 'gc', fname],
+                capture_output=True, text=True, timeout=15,
+            )
+            return bool(r.stdout.strip())
+        finally:
+            try:
+                os.unlink(fname)
+            except OSError:
+                pass
+    except Exception:
+        return False
+
+
+def _agent_config(cfg: dict, use_static_ip: bool = True) -> str:
     """Generate agent-config.yaml.
 
-    Static NMState networkConfig blocks are only emitted when nmstatectl is
-    present on the host — openshift-install validates them by calling it.
-    Without nmstatectl the nodes will obtain IPs via DHCP.
+    Static NMState networkConfig blocks are only emitted when use_static_ip
+    is True (caller pre-validates with nmstatectl before setting this flag).
+    Without static IP the nodes obtain addresses via DHCP.
 
     Uses PyYAML dump to ensure consistent indentation that Go yaml.v2 accepts.
     """
@@ -450,7 +506,6 @@ def _agent_config(cfg: dict) -> str:
     dns_raw       = cfg.get('dns') or cfg.get('dns_servers') or '8.8.8.8'
     dns           = str(dns_raw).split(',')[0].strip()
     prefix_len    = int(cfg.get('prefix_len', 24))
-    use_static_ip = cfg.get('static_ip', True) and _has_nmstatectl()
 
     if not nodes:
         return ''
@@ -475,14 +530,11 @@ def _agent_config(cfg: dict) -> str:
             ],
         }
 
-        # Static IP via NMState — only when nmstatectl is installed
+        # Static IP via NMState — only when nmstatectl validated OK
+        # Do NOT include mac-address in the NMState interfaces block:
+        # nmstate 2.x resolves interfaces by MAC on the build host and
+        # fails when the VM's MAC doesn't exist here.
         if use_static_ip and ip and gateway:
-            # Do NOT include mac-address in the NMState interfaces block.
-            # nmstate 2.x looks up interfaces by MAC on the *build host* when
-            # mac-address is present; since the host has no interface with the VM's
-            # MAC, nmstate generates an empty NM config and openshift-install fails
-            # with "nmstate generated an empty NetworkManager config file content".
-            # MAC binding is already handled by host_entry['interfaces'] above.
             nc_iface: dict = {
                 'name':  iface,
                 'type':  'ethernet',
@@ -686,19 +738,44 @@ def _run_agent_deploy(job_id: str, cfg: dict):
         except Exception:
             pass
 
+        # ── Decide whether static IP (NMState) config can be used ────────────────
+        # nmstate 2.x requires interfaces to exist on the BUILD HOST to generate
+        # NM config. VM interfaces (enp1s0) don't exist here, so nmstate 2.x
+        # produces empty output → openshift-install fails ISO creation.
+        # We pre-validate by running `nmstatectl gc` on a sample config; if it
+        # returns empty / errors, we fall back to DHCP (no networkConfig).
+        use_static_ip = False
+        if _has_nmstatectl() and cfg.get('static_ip', True):
+            sample_nodes = cfg.get('nodes', [])
+            _iface      = (sample_nodes[0].get('interface', 'enp1s0')
+                           if sample_nodes else 'enp1s0')
+            _ip         = (sample_nodes[0].get('ip', '10.0.0.2')
+                           if sample_nodes else '10.0.0.2')
+            _gw         = cfg.get('gateway', '') or '10.0.0.1'
+            _dns_raw    = cfg.get('dns') or cfg.get('dns_servers') or '8.8.8.8'
+            _dns        = str(_dns_raw).split(',')[0].strip()
+            _plen       = int(cfg.get('prefix_len', 24))
+
+            log('  Testing nmstatectl compatibility for static IP config…')
+            if _nmstate_can_handle_virtual_iface(_iface, _ip, _plen, _gw, _dns):
+                use_static_ip = True
+                log('  nmstatectl validation passed — static IP (NMState) config will be used ✓')
+            else:
+                log('  nmstatectl cannot validate virtual interfaces (nmstate 2.x limitation) — '
+                    'networkConfig omitted, nodes will use DHCP', 'warn')
+                log('  Static IPs will still work if you configure DHCP reservations for each MAC.', 'warn')
+        elif not _has_nmstatectl():
+            log('  nmstatectl not found — networkConfig omitted, nodes will use DHCP', 'warn')
+            log('  To enable static IPs: sudo apt install nmstate  OR  sudo dnf install nmstate', 'warn')
+
         state_json = install_dir / '.openshift_install_state.json'
         if not saved_iso or not state_json.exists():
             ic_path = install_dir / 'install-config.yaml'
             ac_path = install_dir / 'agent-config.yaml'
             ic_path.write_text(_install_config(cfg))
-            ac_path.write_text(_agent_config(cfg))
+            ac_path.write_text(_agent_config(cfg, use_static_ip=use_static_ip))
             log('  install-config.yaml written ✓')
             log('  agent-config.yaml written ✓')
-            if _has_nmstatectl():
-                log('  nmstatectl found — static IP (NMState) config included ✓')
-            else:
-                log('  nmstatectl not found — networkConfig omitted, nodes will use DHCP', 'warn')
-                log('  To enable static IPs: sudo apt install nmstate  OR  sudo dnf install nmstate', 'warn')
             # If there's no state.json, the ISO must be rebuilt even if the file exists
             if saved_iso and not state_json.exists():
                 log('  Install state missing — ISO must be rebuilt', 'warn')
