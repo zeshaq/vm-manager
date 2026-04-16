@@ -338,7 +338,10 @@ def delete_job(job_id):
                     dom = conn.lookupByName(vm_name)
                     if dom.isActive():
                         dom.destroy()
-                    dom.undefine()
+                    try:
+                        dom.undefineFlags(libvirt.VIR_DOMAIN_UNDEFINE_NVRAM)
+                    except libvirt.libvirtError:
+                        dom.undefine()
                     deleted_vms.append(vm_name)
                 except libvirt.libvirtError:
                     pass
@@ -653,7 +656,10 @@ def reset_cluster(job_id):
                         dom = conn.lookupByName(vm_name)
                         if dom.isActive():
                             dom.destroy()
-                        dom.undefine()
+                        try:
+                            dom.undefineFlags(libvirt.VIR_DOMAIN_UNDEFINE_NVRAM)
+                        except libvirt.libvirtError:
+                            dom.undefine()
                         destroyed_vms.append(vm_name)
                         _log(f'  Destroyed VM {vm_name} ✓')
                     except libvirt.libvirtError:

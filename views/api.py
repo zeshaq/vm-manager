@@ -531,7 +531,12 @@ def delete_vm(uuid):
 
         if dom.isActive():
             dom.destroy()
-        dom.undefine()
+        # EFI/UEFI VMs have an NVRAM file that must be removed with the domain.
+        # Plain undefine() raises libvirtError for these — use the NVRAM flag.
+        try:
+            dom.undefineFlags(libvirt.VIR_DOMAIN_UNDEFINE_NVRAM)
+        except libvirt.libvirtError:
+            dom.undefine()   # fallback for non-EFI or older libvirt
 
         # Remove disk files — skip backing files (cloud base images)
         deleted, skipped = [], []
