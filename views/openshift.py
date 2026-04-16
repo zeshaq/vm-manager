@@ -1432,47 +1432,86 @@ def _run_deploy(job_id: str, cfg: dict):
             hosts_sorted = sorted(hosts, key=lambda h: h.get('created_at', ''))
 
             for idx, host in enumerate(hosts_sorted):
-                host_id = host['id']
-
-                # inventory is a JSON string in the API response — parse it first
-                raw_inv = host.get('inventory') or '{}'
-                if isinstance(raw_inv, str):
-                    try:
-                        inv = json.loads(raw_inv)
-                    except Exception:
-                        inv = {}
-                else:
-                    inv = raw_inv
-
-                nics = inv.get('interfaces') or inv.get('nics') or []
-                host_mac = None
-                for nic in nics:
-                    mac = (nic.get('mac_address') or nic.get('macAddress') or '').lower()
-                    if mac in mac_to_vm:
-                        host_mac = mac
-                        break
-
-                vm_name = mac_to_vm.get(host_mac) if host_mac else None
+                host_id  = host['id']
+                url      = f'/infra-envs/{infra_env_id}/hosts/{host_id}'
+                vm_name  = _parse_host_mac(host, mac_to_vm)
 
                 # Fallback: assign by index if MAC didn't match
                 if not vm_name and idx < len(vm_names):
                     vm_name = vm_names[idx]
+                    log(f'  Host {host_id[:8]}: MAC not matched — using index fallback → {vm_name}', 'warn')
+                else:
+                    log(f'  Host {host_id[:8]}: MAC matched → {vm_name}')
 
                 role = 'worker' if (vm_name in vm_names[n_control:]) else 'master'
-                url  = f'/infra-envs/{infra_env_id}/hosts/{host_id}'
 
+                # Assign role
                 try:
                     _ai('PATCH', url, token, {'host_role': role})
-                    matched = 'MAC matched' if host_mac else 'index fallback'
-                    log(f'  Set {vm_name or host_id[:8]} → {role} ({matched})')
+                    log(f'  Role: {vm_name} → {role} ✓')
                 except Exception as e:
-                    log(f'  Role assignment warning: {e}', 'warn')
+                    log(f'  Role assignment warning for {vm_name}: {e}', 'warn')
 
+                # Assign hostname — retry up to 3x with 5s delay
                 if vm_name:
+                    assigned = False
+                    for attempt in range(3):
+                        try:
+                            resp = _ai('PATCH', url, token, {'requested_hostname': vm_name})
+                            if resp.status_code < 300:
+                                log(f'  Hostname: {vm_name} ✓')
+                                assigned = True
+                                break
+                            else:
+                                log(f'  Hostname PATCH attempt {attempt+1} failed: HTTP {resp.status_code} — {resp.text[:120]}', 'warn')
+                        except Exception as e:
+                            log(f'  Hostname PATCH attempt {attempt+1} error: {e}', 'warn')
+                        time.sleep(5)
+                    if not assigned:
+                        log(f'  Could not assign hostname for {vm_name} after 3 attempts', 'warn')
+
+        # ── Step 6a: Verify hostname assignments ──────────────────────────────
+        # Poll until all hosts reflect the correct VM name.
+        # Re-patch any host that still shows the wrong hostname.
+        if not is_sno:
+            phase('Verifying hostname assignments', 58)
+            log('Verifying hostnames are applied…')
+            mac_to_vm = {mac.lower(): vm for vm, mac in mac_map.items()}
+
+            for poll in range(12):   # up to 60 seconds
+                token = _get_access_token(cfg['offline_token'])
+                r = _ai('GET', f'/clusters/{cluster_id}/hosts', token)
+                hosts_now = r.json()
+
+                wrong = []
+                for host in hosts_now:
+                    host_id      = host['id']
+                    current_name = host.get('requested_hostname', '')
+                    vm_name      = _parse_host_mac(host, mac_to_vm)
+                    if not vm_name:
+                        # fallback by current name already matching a vm name
+                        vm_name = next((v for v in vm_names if v == current_name), None)
+                    if vm_name and current_name != vm_name:
+                        wrong.append((host_id, vm_name, current_name))
+
+                if not wrong:
+                    log('  All hostnames verified ✓')
+                    break
+
+                log(f'  {len(wrong)} host(s) still have wrong hostname — re-patching…')
+                for host_id, vm_name, current_name in wrong:
+                    url = f'/infra-envs/{infra_env_id}/hosts/{host_id}'
                     try:
-                        _ai('PATCH', url, token, {'requested_hostname': vm_name})
-                    except Exception:
-                        pass  # hostname rename may be rejected once host is in known state
+                        resp = _ai('PATCH', url, token, {'requested_hostname': vm_name})
+                        if resp.status_code < 300:
+                            log(f'  Re-patched: {current_name or host_id[:8]} → {vm_name} ✓')
+                        else:
+                            log(f'  Re-patch failed for {vm_name}: HTTP {resp.status_code}', 'warn')
+                    except Exception as e:
+                        log(f'  Re-patch error for {vm_name}: {e}', 'warn')
+                time.sleep(5)
+            else:
+                log('  Hostname verification timed out — continuing anyway', 'warn')
 
         # Build MAC → vm_name reverse lookup unconditionally (used in monitoring loop)
         mac_to_vm = {mac.lower(): vm for vm, mac in mac_map.items()}
