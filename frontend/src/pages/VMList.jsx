@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
-import { Play, Square, Trash2, Eye, PlusCircle, RefreshCw, Monitor } from 'lucide-react'
+import { Play, Square, Trash2, Eye, PlusCircle, RefreshCw, Monitor, Lock, Unlock } from 'lucide-react'
 import api from '../api'
 
 function StateBadge({ state }) {
@@ -57,12 +57,34 @@ export default function VMList() {
   const handleDelete = async uuid => {
     if (!confirm('Delete this VM? This cannot be undone.')) return
     setLoading_(uuid, true)
-    try { await api.delete(`/vms/${uuid}`); fetchVMs() } catch(e) { alert(e.response?.data?.error || 'Error') }
+    try { await api.delete(`/vms/${uuid}`); fetchVMs() }
+    catch(e) { alert(e.response?.data?.error || 'Error') }
+    setLoading_(uuid, false)
+  }
+
+  const handleLock = async uuid => {
+    setLoading_(uuid, true)
+    try { await api.post(`/vms/${uuid}/lock`); fetchVMs() }
+    catch(e) { alert(e.response?.data?.error || 'Error') }
+    setLoading_(uuid, false)
+  }
+
+  const handleUnlock = async uuid => {
+    setLoading_(uuid, true)
+    try { await api.post(`/vms/${uuid}/unlock`); fetchVMs() }
+    catch(e) { alert(e.response?.data?.error || 'Error') }
     setLoading_(uuid, false)
   }
 
   const handleBulkAction = async action => {
     if (selected.length === 0) return
+    if (action === 'delete') {
+      const locked = vms.filter(v => selected.includes(v.uuid) && v.locked)
+      if (locked.length > 0) {
+        alert(`Cannot delete: ${locked.map(v => v.name).join(', ')} ${locked.length === 1 ? 'is' : 'are'} locked.`)
+        return
+      }
+    }
     if (!confirm(`${action} ${selected.length} VM(s)?`)) return
     await Promise.all(selected.map(uuid => {
       if (action === 'start') return api.post(`/vms/${uuid}/start`).catch(() => {})
@@ -159,9 +181,16 @@ export default function VMList() {
                     />
                   </td>
                   <td className="px-4 py-3">
-                    <Link to={`/vms/${vm.uuid}`} className="text-slate-200 hover:text-sky-400 font-medium transition-colors">
-                      {vm.name}
-                    </Link>
+                    <div className="flex items-center gap-2">
+                      <Link to={`/vms/${vm.uuid}`} className="text-slate-200 hover:text-sky-400 font-medium transition-colors">
+                        {vm.name}
+                      </Link>
+                      {vm.locked && (
+                        <span title="Locked — delete prevented" className="text-amber-400">
+                          <Lock size={12} />
+                        </span>
+                      )}
+                    </div>
                   </td>
                   <td className="px-4 py-3"><StateBadge state={vm.state} /></td>
                   <td className="px-4 py-3 text-right text-slate-300">{vm.memory_mb} MB</td>
@@ -197,11 +226,30 @@ export default function VMList() {
                           <Monitor size={13} />
                         </a>
                       )}
+                      {vm.locked ? (
+                        <button
+                          onClick={() => handleUnlock(vm.uuid)}
+                          disabled={actionLoading[vm.uuid]}
+                          title="Unlock VM"
+                          className="p-1.5 rounded bg-amber-900/60 hover:bg-amber-800 text-amber-400 transition-colors disabled:opacity-50"
+                        >
+                          <Unlock size={13} />
+                        </button>
+                      ) : (
+                        <button
+                          onClick={() => handleLock(vm.uuid)}
+                          disabled={actionLoading[vm.uuid]}
+                          title="Lock VM (prevent deletion)"
+                          className="p-1.5 rounded bg-navy-500 hover:bg-navy-400 text-slate-400 hover:text-amber-400 transition-colors disabled:opacity-50"
+                        >
+                          <Lock size={13} />
+                        </button>
+                      )}
                       <button
                         onClick={() => handleDelete(vm.uuid)}
-                        disabled={actionLoading[vm.uuid]}
-                        title="Delete"
-                        className="p-1.5 rounded bg-red-900/60 hover:bg-red-800 text-red-400 transition-colors disabled:opacity-50"
+                        disabled={actionLoading[vm.uuid] || vm.locked}
+                        title={vm.locked ? 'Unlock before deleting' : 'Delete'}
+                        className="p-1.5 rounded bg-red-900/60 hover:bg-red-800 text-red-400 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                       >
                         <Trash2 size={13} />
                       </button>

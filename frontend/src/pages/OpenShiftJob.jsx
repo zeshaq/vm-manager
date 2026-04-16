@@ -117,6 +117,59 @@ function StepTimeline({ progress, isComplete, isFailed }) {
   )
 }
 
+// ── Sub-component: ISO download progress bar with speed ──────────────────────
+function IsoDownloadBar({ isoDl, fallbackPct }) {
+  const pct      = isoDl?.pct      ?? fallbackPct ?? 0
+  const speed    = isoDl?.speed_mbs ?? null
+  const doneMb   = isoDl?.done_mb  ?? null
+  const totalMb  = isoDl?.total_mb ?? null
+  const etaSec   = isoDl?.eta_s    ?? null
+
+  const etaLabel = etaSec != null && etaSec > 0
+    ? etaSec >= 60
+      ? `${Math.floor(etaSec / 60)}m ${etaSec % 60}s left`
+      : `${etaSec}s left`
+    : null
+
+  return (
+    <div className="space-y-2">
+      {/* Header row */}
+      <div className="flex items-center justify-between text-xs">
+        <span className="text-slate-400 font-medium flex items-center gap-1.5">
+          <span>Full ISO Download</span>
+        </span>
+        <div className="flex items-center gap-3">
+          {speed != null && (
+            <span className="font-mono text-purple-300 font-semibold">
+              {speed} <span className="text-purple-500 font-normal">MB/s</span>
+            </span>
+          )}
+          {etaLabel && (
+            <span className="text-slate-500 font-mono">{etaLabel}</span>
+          )}
+          <span className="font-bold text-purple-400">{pct}%</span>
+        </div>
+      </div>
+
+      {/* Progress bar */}
+      <div className="w-full bg-navy-700 rounded-full h-2.5 overflow-hidden">
+        <div
+          className="h-2.5 rounded-full bg-gradient-to-r from-purple-500 to-violet-400 transition-all duration-700"
+          style={{ width: `${pct}%` }}
+        />
+      </div>
+
+      {/* Size row */}
+      {doneMb != null && totalMb != null && totalMb > 0 && (
+        <div className="flex items-center justify-between text-[11px] text-slate-600 font-mono">
+          <span>{doneMb.toFixed(0)} MB downloaded</span>
+          <span>{totalMb.toFixed(0)} MB total</span>
+        </div>
+      )}
+    </div>
+  )
+}
+
 // ── Sub-component: labeled progress bar ──────────────────────────────────────
 function ProgressBar({ label, value, max, color = 'sky', suffix, sublabel }) {
   const pct = max > 0 ? Math.min(100, Math.round(value / max * 100)) : (value || 0)
@@ -1140,7 +1193,9 @@ export default function OpenShiftJob() {
           <div className="text-slate-400 text-xs mt-0.5">
             {isComplete ? 'Cluster is installed and ready!'
             : isFailed  ? 'Deployment failed — check errors below.'
-            : isDownloadingISO ? `Downloading discovery ISO… ${isoDownloadPct ?? 0}%`
+            : isDownloadingISO ? (job.iso_dl
+                ? `Downloading ISO… ${job.iso_dl.pct}% · ${job.iso_dl.speed_mbs} MB/s`
+                : `Downloading discovery ISO… ${isoDownloadPct ?? 0}%`)
             : showInstallBar && parsed?.installInfo ? parsed.installInfo
             : 'Deployment in progress — this may take 45–90 minutes.'}
           </div>
@@ -1164,13 +1219,8 @@ export default function OpenShiftJob() {
         <div className="bg-navy-800 border border-navy-600 rounded-xl p-4 space-y-4">
 
           {/* ISO download bar */}
-          {isDownloadingISO && isoDownloadPct !== null && (
-            <ProgressBar
-              label="Discovery ISO Download"
-              value={isoDownloadPct}
-              color="purple"
-              sublabel="~100 MB"
-            />
+          {isDownloadingISO && (
+            <IsoDownloadBar isoDl={job.iso_dl} fallbackPct={isoDownloadPct ?? 0} />
           )}
 
           {/* VM creation progress */}

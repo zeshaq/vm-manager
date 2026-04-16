@@ -25,6 +25,9 @@ import Security from './pages/Security'
 import OpenShiftList from './pages/OpenShiftList'
 import OpenShiftDeploy from './pages/OpenShift'
 import OpenShiftJob from './pages/OpenShiftJob'
+import OcpAgentList from './pages/OcpAgentList'
+import OcpAgentDeploy from './pages/OcpAgentDeploy'
+import OcpAgentJob from './pages/OcpAgentJob'
 
 function PrivateRoute({ children, authState }) {
   if (authState === 'loading') {
@@ -94,6 +97,9 @@ export default function App() {
                 <Route path="/openshift"              element={<OpenShiftList />} />
                 <Route path="/openshift/deploy"      element={<OpenShiftDeploy />} />
                 <Route path="/openshift/jobs/:jobId" element={<OpenShiftJob />} />
+                <Route path="/ocp-agent"              element={<OcpAgentList />} />
+                <Route path="/ocp-agent/deploy"      element={<OcpAgentDeploy />} />
+                <Route path="/ocp-agent/jobs/:jobId" element={<OcpAgentJob />} />
                 <Route path="*" element={<Navigate to="/" replace />} />
               </Routes>
             </Layout>

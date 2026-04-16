@@ -372,9 +372,10 @@ export default function OpenShiftList() {
                       </button>
                       <button onClick={() => deleteJob(j.id)}
                         disabled={deleting === j.id}
-                        className="p-1.5 rounded text-slate-500 hover:text-red-400 hover:bg-red-500/10 transition-colors disabled:opacity-40"
+                        className="px-3 py-1.5 rounded text-sm font-medium text-red-400 hover:text-white hover:bg-red-600 border border-red-500/30 hover:border-red-600 transition-all disabled:opacity-40 flex items-center gap-1.5"
                         title="Delete record">
-                        {deleting === j.id ? <Loader2 size={13} className="animate-spin" /> : <Trash2 size={13} />}
+                        {deleting === j.id ? <Loader2 size={14} className="animate-spin" /> : <Trash2 size={14} />}
+                        <span>Delete</span>
                       </button>
                     </div>
                   </td>

@@ -3,7 +3,8 @@ import api from '../api'
 import {
   Network, RefreshCw, AlertCircle, CheckCircle, Loader2, X,
   ArrowUpDown, FileText, Plus, Save, Play, ShieldAlert,
-  Wifi, WifiOff, ChevronRight, Globe, Route, Dna
+  Wifi, WifiOff, ChevronRight, Globe, Route, Dna,
+  Power, PowerOff, Trash2, ChevronDown, Settings, Zap
 } from 'lucide-react'
 
 // ── helpers ───────────────────────────────────────────────────────────────────
@@ -542,10 +543,370 @@ function NetplanTab({ notify }) {
   )
 }
 
+// ── Virsh Networks tab ────────────────────────────────────────────────────────
+
+const FWD_STYLES = {
+  nat:      { cls: 'bg-green-500/15 text-green-400',   label: 'NAT' },
+  route:    { cls: 'bg-purple-500/15 text-purple-400', label: 'Route' },
+  bridge:   { cls: 'bg-sky-500/15 text-sky-400',       label: 'Bridge' },
+  open:     { cls: 'bg-yellow-500/15 text-yellow-400', label: 'Open' },
+  isolated: { cls: 'bg-slate-500/15 text-slate-400',   label: 'Isolated' },
+}
+
+const inputCls = 'w-full bg-navy-700 border border-navy-500 text-slate-100 rounded-md px-3 py-2 text-sm focus:outline-none focus:border-sky-500 placeholder-slate-600'
+const labelCls = 'block text-xs font-medium text-slate-400 mb-1'
+
+function Field({ label, children, hint }) {
+  return (
+    <div>
+      <label className={labelCls}>{label}</label>
+      {children}
+      {hint && <p className="text-slate-600 text-xs mt-1">{hint}</p>}
+    </div>
+  )
+}
+
+function CreateNetworkForm({ onCreated, onCancel, notify }) {
+  const [form, setForm] = useState({
+    name: '', forward_mode: 'nat', bridge_name: '',
+    ip_address: '', prefix: '24',
+    dhcp_enabled: true, dhcp_start: '', dhcp_end: '',
+  })
+  const [busy, setBusy] = useState(false)
+
+  const set = (k, v) => setForm(p => ({ ...p, [k]: v }))
+
+  // Auto-suggest DHCP range when IP changes
+  const suggestDhcp = (ip, prefix) => {
+    try {
+      const parts = ip.split('.')
+      if (parts.length !== 4) return
+      const base = parts.slice(0, 3).join('.')
+      set('dhcp_start', `${base}.2`)
+      set('dhcp_end',   `${base}.254`)
+    } catch {}
+  }
+
+  const submit = async e => {
+    e.preventDefault()
+    setBusy(true)
+    try {
+      await api.post('/virsh/networks', form)
+      notify('Network created ✓')
+      onCreated()
+    } catch(err) {
+      notify(err.response?.data?.error || 'Failed to create network', 'error')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const isBridge = form.forward_mode === 'bridge'
+
+  return (
+    <form onSubmit={submit} className="bg-navy-800 border border-navy-500 rounded-xl p-5 space-y-4">
+      <h3 className="text-slate-200 font-semibold text-sm flex items-center gap-2">
+        <Plus size={14} className="text-sky-400" /> New Virtual Network
+      </h3>
+
+      <div className="grid grid-cols-2 gap-4">
+        <Field label="Network Name *">
+          <input value={form.name} onChange={e => set('name', e.target.value)}
+            placeholder="mynet" required className={inputCls} />
+        </Field>
+        <Field label="Forward Mode">
+          <select value={form.forward_mode} onChange={e => set('forward_mode', e.target.value)}
+            className={inputCls}>
+            <option value="nat">NAT (internet access via host)</option>
+            <option value="route">Route (routed, no masquerade)</option>
+            <option value="open">Open (no firewall rules)</option>
+            <option value="bridge">Bridge (attach to host bridge)</option>
+            <option value="isolated">Isolated (no external access)</option>
+          </select>
+        </Field>
+      </div>
+
+      {isBridge ? (
+        <Field label="Host Bridge Interface *" hint="e.g. br0, br-lan — must already exist on the host">
+          <input value={form.bridge_name} onChange={e => set('bridge_name', e.target.value)}
+            placeholder="br0" required className={inputCls + ' font-mono'} />
+        </Field>
+      ) : (
+        <>
+          <div className="grid grid-cols-3 gap-4">
+            <div className="col-span-2">
+              <Field label="Gateway IP *" hint="Host-side IP — becomes the gateway for VMs">
+                <input value={form.ip_address}
+                  onChange={e => { set('ip_address', e.target.value); suggestDhcp(e.target.value, form.prefix) }}
+                  placeholder="192.168.100.1" required className={inputCls + ' font-mono'} />
+              </Field>
+            </div>
+            <Field label="Prefix Length">
+              <input value={form.prefix} onChange={e => set('prefix', e.target.value)}
+                type="number" min="8" max="30" className={inputCls} />
+            </Field>
+          </div>
+
+          <div className="bg-navy-700 rounded-lg p-4 space-y-3">
+            <label className="flex items-center gap-2 cursor-pointer">
+              <input type="checkbox" checked={form.dhcp_enabled}
+                onChange={e => set('dhcp_enabled', e.target.checked)}
+                className="rounded" />
+              <span className="text-sm text-slate-300">Enable DHCP server (dnsmasq)</span>
+            </label>
+            {form.dhcp_enabled && (
+              <div className="grid grid-cols-2 gap-4">
+                <Field label="DHCP Start">
+                  <input value={form.dhcp_start} onChange={e => set('dhcp_start', e.target.value)}
+                    placeholder="192.168.100.2" className={inputCls + ' font-mono text-xs'} />
+                </Field>
+                <Field label="DHCP End">
+                  <input value={form.dhcp_end} onChange={e => set('dhcp_end', e.target.value)}
+                    placeholder="192.168.100.254" className={inputCls + ' font-mono text-xs'} />
+                </Field>
+              </div>
+            )}
+          </div>
+        </>
+      )}
+
+      <div className="flex gap-2 pt-1">
+        <button type="submit" disabled={busy}
+          className="flex items-center gap-2 bg-sky-600 hover:bg-sky-500 disabled:opacity-50 text-white font-semibold px-4 py-2 rounded-md text-sm transition-colors">
+          {busy ? <Loader2 size={14} className="animate-spin" /> : <Plus size={14} />}
+          Create Network
+        </button>
+        <button type="button" onClick={onCancel}
+          className="px-4 py-2 rounded-md text-sm text-slate-400 hover:text-slate-200 hover:bg-navy-700 transition-colors">
+          Cancel
+        </button>
+      </div>
+    </form>
+  )
+}
+
+function NetworkCard({ net, onAction, notify }) {
+  const [loading, setLoading] = useState('')
+  const [expanded, setExpanded] = useState(false)
+  const [leases, setLeases]     = useState([])
+  const [loadingLeases, setLL]  = useState(false)
+
+  const fwd = FWD_STYLES[net.forward_mode] || FWD_STYLES.isolated
+
+  const act = async (action, fn) => {
+    setLoading(action)
+    try { await fn(); onAction() }
+    catch(e) { notify(e.response?.data?.error || `Failed: ${action}`, 'error') }
+    finally { setLoading('') }
+  }
+
+  const loadLeases = async () => {
+    setLL(true)
+    try {
+      const r = await api.get(`/virsh/networks/${net.name}/leases`)
+      setLeases(r.data)
+    } catch { setLeases([]) }
+    finally { setLL(false) }
+  }
+
+  const toggleLeases = () => {
+    const next = !expanded
+    setExpanded(next)
+    if (next && net.active) loadLeases()
+  }
+
+  const confirmDelete = () => {
+    if (!confirm(`Delete network "${net.name}"?\nActive VMs using this network may lose connectivity.`)) return
+    act('delete', () => api.delete(`/virsh/networks/${net.name}`))
+  }
+
+  return (
+    <div className={`bg-navy-800 border rounded-xl overflow-hidden transition-all ${
+      net.active ? 'border-navy-500' : 'border-navy-600 opacity-75'
+    }`}>
+      {/* Header row */}
+      <div className="flex items-center gap-4 px-5 py-4">
+        {/* Status dot */}
+        <div className={`w-2.5 h-2.5 rounded-full flex-shrink-0 ${net.active ? 'bg-green-400' : 'bg-slate-600'}`} />
+
+        {/* Info */}
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="text-slate-100 font-semibold text-sm">{net.name}</span>
+            <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${fwd.cls}`}>{fwd.label}</span>
+            {net.autostart && (
+              <span className="text-xs px-2 py-0.5 rounded-full bg-sky-500/10 text-sky-400 font-medium">autostart</span>
+            )}
+          </div>
+          <div className="flex items-center gap-3 mt-1 text-xs text-slate-500 flex-wrap">
+            {net.bridge && <span className="font-mono">bridge: {net.bridge}</span>}
+            {net.cidr   && <span className="font-mono">{net.cidr}</span>}
+            {net.dhcp_start && (
+              <span>DHCP {net.dhcp_start} – {net.dhcp_end}</span>
+            )}
+            {!net.active && <span className="text-red-400">inactive</span>}
+          </div>
+        </div>
+
+        {/* Actions */}
+        <div className="flex items-center gap-1.5 flex-shrink-0">
+          {net.active ? (
+            <button onClick={() => act('stop', () => api.post(`/virsh/networks/${net.name}/stop`))}
+              disabled={!!loading}
+              title="Stop network"
+              className="p-1.5 rounded bg-yellow-900/40 hover:bg-yellow-800 text-yellow-400 transition-colors disabled:opacity-40">
+              {loading === 'stop' ? <Loader2 size={14} className="animate-spin" /> : <PowerOff size={14} />}
+            </button>
+          ) : (
+            <button onClick={() => act('start', () => api.post(`/virsh/networks/${net.name}/start`))}
+              disabled={!!loading}
+              title="Start network"
+              className="p-1.5 rounded bg-green-900/40 hover:bg-green-800 text-green-400 transition-colors disabled:opacity-40">
+              {loading === 'start' ? <Loader2 size={14} className="animate-spin" /> : <Power size={14} />}
+            </button>
+          )}
+          <button onClick={() => act('autostart', () => api.post(`/virsh/networks/${net.name}/autostart`))}
+            disabled={!!loading}
+            title={net.autostart ? 'Disable autostart' : 'Enable autostart'}
+            className={`p-1.5 rounded transition-colors disabled:opacity-40 ${
+              net.autostart
+                ? 'bg-sky-900/40 hover:bg-sky-800 text-sky-400'
+                : 'bg-navy-600 hover:bg-navy-500 text-slate-400 hover:text-sky-400'
+            }`}>
+            {loading === 'autostart' ? <Loader2 size={14} className="animate-spin" /> : <Zap size={14} />}
+          </button>
+          {net.active && net.dhcp_start && (
+            <button onClick={toggleLeases}
+              title="DHCP leases"
+              className={`p-1.5 rounded transition-colors ${
+                expanded ? 'bg-navy-500 text-sky-400' : 'bg-navy-600 hover:bg-navy-500 text-slate-400 hover:text-sky-400'
+              }`}>
+              <ChevronDown size={14} className={`transition-transform ${expanded ? 'rotate-180' : ''}`} />
+            </button>
+          )}
+          <button onClick={confirmDelete}
+            disabled={!!loading}
+            title="Delete network"
+            className="p-1.5 rounded bg-red-900/40 hover:bg-red-800 text-red-400 transition-colors disabled:opacity-40">
+            {loading === 'delete' ? <Loader2 size={14} className="animate-spin" /> : <Trash2 size={14} />}
+          </button>
+        </div>
+      </div>
+
+      {/* DHCP Leases expandable */}
+      {expanded && (
+        <div className="border-t border-navy-600 px-5 py-3">
+          <div className="flex items-center gap-2 mb-2 text-xs text-slate-400 font-semibold uppercase tracking-wide">
+            <Settings size={11} /> DHCP Leases
+            {loadingLeases && <Loader2 size={11} className="animate-spin ml-1" />}
+            <button onClick={() => { loadLeases() }}
+              className="ml-auto text-sky-400 hover:text-sky-300 normal-case font-normal tracking-normal">
+              <RefreshCw size={11} />
+            </button>
+          </div>
+          {!loadingLeases && leases.length === 0 ? (
+            <p className="text-slate-600 text-xs py-2">No active DHCP leases.</p>
+          ) : (
+            <table className="w-full text-xs">
+              <thead>
+                <tr className="text-slate-500">
+                  <th className="text-left py-1 pr-4">MAC</th>
+                  <th className="text-left py-1 pr-4">IP Address</th>
+                  <th className="text-left py-1 pr-4">Hostname</th>
+                </tr>
+              </thead>
+              <tbody>
+                {leases.map((l, i) => (
+                  <tr key={i} className="border-t border-navy-700">
+                    <td className="py-1.5 pr-4 font-mono text-slate-300">{l.mac}</td>
+                    <td className="py-1.5 pr-4 font-mono text-sky-300">{l.ip}/{l.prefix}</td>
+                    <td className="py-1.5 text-slate-400">{l.hostname || <span className="text-slate-600 italic">unknown</span>}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function VirshNetworksTab({ notify }) {
+  const [networks, setNetworks] = useState([])
+  const [loading, setLoading]   = useState(true)
+  const [showCreate, setShow]   = useState(false)
+
+  const fetchNetworks = useCallback(async () => {
+    setLoading(true)
+    try {
+      const r = await api.get('/virsh/networks')
+      setNetworks(r.data)
+    } catch(e) {
+      notify(e.response?.data?.error || 'Failed to load networks', 'error')
+    } finally {
+      setLoading(false)
+    }
+  }, [])
+
+  useEffect(() => { fetchNetworks() }, [fetchNetworks])
+
+  const active   = networks.filter(n => n.active)
+  const inactive = networks.filter(n => !n.active)
+
+  return (
+    <div className="space-y-4">
+      {/* Toolbar */}
+      <div className="flex items-center justify-between">
+        <div className="text-slate-400 text-sm">
+          {networks.length} network{networks.length !== 1 ? 's' : ''}{' '}
+          <span className="text-green-400">({active.length} active)</span>
+        </div>
+        <div className="flex gap-2">
+          <Btn onClick={fetchNetworks} loading={loading} size="sm">
+            <RefreshCw size={12} /> Refresh
+          </Btn>
+          <Btn onClick={() => setShow(v => !v)} variant="primary" size="sm">
+            <Plus size={12} /> New Network
+          </Btn>
+        </div>
+      </div>
+
+      {/* Create form */}
+      {showCreate && (
+        <CreateNetworkForm
+          notify={notify}
+          onCreated={() => { setShow(false); fetchNetworks() }}
+          onCancel={() => setShow(false)}
+        />
+      )}
+
+      {/* Network cards */}
+      {loading && networks.length === 0 ? (
+        <div className="flex items-center justify-center py-16 text-slate-500 gap-2">
+          <Loader2 size={16} className="animate-spin" /> Loading networks…
+        </div>
+      ) : networks.length === 0 ? (
+        <div className="text-center py-16 text-slate-500">
+          No libvirt networks defined.
+          <button onClick={() => setShow(true)} className="ml-2 text-sky-400 hover:underline">Create one</button>
+        </div>
+      ) : (
+        <div className="space-y-3">
+          {[...active, ...inactive].map(net => (
+            <NetworkCard key={net.name} net={net} onAction={fetchNetworks} notify={notify} />
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
 // ── Main page ─────────────────────────────────────────────────────────────────
 
 const TABS = [
   { id: 'interfaces', label: 'Interfaces & Routes', icon: Network },
+  { id: 'virsh',      label: 'Virtual Networks',    icon: Wifi },
   { id: 'netplan',    label: 'Netplan Editor',      icon: FileText },
 ]
 
@@ -576,8 +937,9 @@ export default function NetworkMgmt() {
         })}
       </div>
 
-      {tab === 'interfaces' && <InterfacesTab notify={notify} />}
-      {tab === 'netplan'    && <NetplanTab    notify={notify} />}
+      {tab === 'interfaces' && <InterfacesTab      notify={notify} />}
+      {tab === 'virsh'      && <VirshNetworksTab   notify={notify} />}
+      {tab === 'netplan'    && <NetplanTab         notify={notify} />}
 
       <Toast msg={toast.msg} type={toast.type} onClose={clearToast} />
     </div>

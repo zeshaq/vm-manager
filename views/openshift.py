@@ -587,6 +587,7 @@ def delete_job(job_id):
     storage_path = Path(job.get('config', {}).get('storage_path', '/var/lib/libvirt/images'))
     deleted_vms, deleted_disks = [], []
 
+    # ── Delete VMs and disks locally ─────────────────────────────────────────
     if vm_names:
         try:
             conn = libvirt.open('qemu:///system')
@@ -599,7 +600,6 @@ def delete_job(job_id):
                     deleted_vms.append(vm_name)
                 except libvirt.libvirtError:
                     pass  # VM already gone
-
             conn.close()
         except Exception:
             pass
@@ -613,13 +613,48 @@ def delete_job(job_id):
                 except OSError:
                     pass
 
+    # ── Delete cluster + infra-env on Red Hat Assisted Installer ─────────────
+    cluster_id    = job.get('cluster_id')
+    infra_env_id  = job.get('infra_env_id')
+    secrets       = _get_job_secrets(job_id)          # read BEFORE deleting secrets
+    offline_token = secrets.get('offline_token', '')
+    ai_deleted    = []
+
+    if offline_token and (cluster_id or infra_env_id):
+        try:
+            token = _get_access_token(offline_token)
+            if infra_env_id:
+                try:
+                    _ai('DELETE', f'/infra-envs/{infra_env_id}', token)
+                    ai_deleted.append(f'infra-env:{infra_env_id}')
+                except Exception as e:
+                    ai_deleted.append(f'infra-env:warn:{e}')
+            if cluster_id:
+                try:
+                    _ai('DELETE', f'/clusters/{cluster_id}', token)
+                    ai_deleted.append(f'cluster:{cluster_id}')
+                except Exception as e:
+                    ai_deleted.append(f'cluster:warn:{e}')
+        except Exception as e:
+            ai_deleted.append(f'auth:warn:{e}')
+
+    # ── Clean up ISO from job dir ─────────────────────────────────────────────
+    job_dir = WORK_DIR / job_id
+    try:
+        iso = job_dir / 'discovery.iso'
+        if iso.exists():
+            iso.unlink()
+    except Exception:
+        pass
+
     with _lock:
         _jobs.pop(job_id, None)
         _save_jobs()
 
     _delete_job_secrets(job_id)
 
-    return jsonify({'ok': True, 'deleted_vms': deleted_vms, 'deleted_disks': deleted_disks})
+    return jsonify({'ok': True, 'deleted_vms': deleted_vms,
+                    'deleted_disks': deleted_disks, 'ai_deleted': ai_deleted})
 
 
 # ── CDROM eject helper ───────────────────────────────────────────────────────
@@ -970,19 +1005,15 @@ def _run_deploy(job_id: str, cfg: dict):
             phase('Infrastructure environment ready', 32)
         else:
             phase('Creating infrastructure environment', 18)
-            # Static IP config (MAC→IP) is deployment-specific and baked into the ISO —
-            # never reuse a cached ISO for static IP deployments.
-            if use_static_ip:
-                cached_infra_env_id, cached_iso_path = None, None
-            else:
-                cached_infra_env_id, cached_iso_path = _get_cached_iso(iso_fingerprint)
+            # Always create a fresh infra-env and download a new ISO for every deployment.
+            cached_infra_env_id, cached_iso_path = None, None
 
             infra_payload = {
                 'name':              f'{cluster_name}-infra',
                 'cluster_id':        cluster_id,
                 'openshift_version': cfg['ocp_version'],
                 'pull_secret':       cfg['pull_secret'],
-                'image_type':        'minimal-iso',
+                'image_type':        'full-iso',
                 'cpu_architecture':  'x86_64',
             }
             if cfg.get('ssh_public_key', '').strip():
@@ -1036,43 +1067,44 @@ def _run_deploy(job_id: str, cfg: dict):
 
                 # ── Step 4: Download discovery ISO ───────────────────────────
                 phase('Downloading discovery ISO', 22)
-                if use_static_ip:
-                    iso_path = job_dir / 'discovery.iso'
-                    iso_path.parent.mkdir(parents=True, exist_ok=True)
-                else:
-                    iso_path = ISO_CACHE_DIR / iso_fingerprint / 'discovery.iso'
-                    iso_path.parent.mkdir(parents=True, exist_ok=True)
+                iso_path = job_dir / 'discovery.iso'
+                iso_path.parent.mkdir(parents=True, exist_ok=True)
                 try:
                     r = _ai('GET', f'/infra-envs/{infra_env_id}/downloads/image-url', token)
                     iso_url = r.json()['url']
-                    log(f'ISO URL obtained, downloading (~100 MB)…')
-                    with _req.get(iso_url, stream=True, timeout=300) as dl:
+                    log(f'ISO URL obtained, downloading full ISO…')
+                    with _req.get(iso_url, stream=True, timeout=600) as dl:
                         dl.raise_for_status()
-                        total = int(dl.headers.get('content-length', 0))
-                        done  = 0
+                        total    = int(dl.headers.get('content-length', 0))
+                        done     = 0
+                        t_start  = time.time()
+                        t_last   = t_start
+                        spd_bytes = 0
                         with open(iso_path, 'wb') as f:
                             for chunk in dl.iter_content(chunk_size=1024 * 1024):
                                 f.write(chunk)
-                                done += len(chunk)
-                                if total:
-                                    pct = 22 + int(done / total * 10)
-                                    _job_set(job_id, progress=pct)
-                    if use_static_ip:
-                        log(f'ISO downloaded (static IP — not cached) ✓')
-                    else:
-                        log(f'ISO downloaded and cached ✓')
+                                n = len(chunk)
+                                done      += n
+                                spd_bytes += n
+                                now = time.time()
+                                if now - t_last >= 1.0:
+                                    speed = spd_bytes / (now - t_last) / 1_048_576
+                                    pct   = int(done / total * 100) if total else 0
+                                    eta_s = int((total - done) / (done / (now - t_start))) if done > 0 and total > done else 0
+                                    _job_set(job_id,
+                                             progress=22 + int(pct / 10),
+                                             iso_dl={
+                                                 'pct':       pct,
+                                                 'speed_mbs': round(speed, 1),
+                                                 'done_mb':   round(done / 1_048_576, 1),
+                                                 'total_mb':  round(total / 1_048_576, 1),
+                                                 'eta_s':     eta_s,
+                                             })
+                                    t_last    = now
+                                    spd_bytes = 0
+                    _job_set(job_id, iso_dl=None)
+                    log(f'ISO downloaded ✓')
                     os.chmod(iso_path, 0o644)
-                    p = iso_path.parent
-                    while p != WORK_DIR.parent:
-                        try:
-                            os.chmod(p, p.stat().st_mode | 0o111)
-                        except Exception:
-                            pass
-                        p = p.parent
-                    if not use_static_ip:
-                        _store_iso_cache(iso_fingerprint, infra_env_id, iso_path,
-                                         cfg['ocp_version'], cfg['pull_secret'],
-                                         cfg.get('ssh_public_key', ''))
                 except Exception as e:
                     fail(f'ISO download failed: {e}')
                     return
@@ -1213,7 +1245,7 @@ def _run_deploy(job_id: str, cfg: dict):
             finally:
                 conn.close()
 
-            _job_set(job_id, vms=created_vms)
+            _job_set(job_id, vms=created_vms, mac_map=mac_map)
 
         # ── Step 6: Wait for host discovery ──────────────────────────────────
         phase('Waiting for nodes to register', 45)
@@ -1231,11 +1263,9 @@ def _run_deploy(job_id: str, cfg: dict):
             if _fc_status in _PAST_READY:
                 log(f'Resuming: cluster already in "{_fc_status}" — skipping node wait, jumping to install monitor')
                 phase('Installing OpenShift', 65)
-                if 'pending-user-action' in _fc_status:
-                    log('  ⚠ Nodes pending user action — ejecting ISO and rebooting…', 'warn')
-                    _eject_cdroms(vm_names, log)
-                    time.sleep(2)
-                    _reboot_vms(vm_names, log)
+                # Do NOT eject/reboot here — the monitor loop handles per-host
+                # pending-user-action with proper MAC matching. Blanket eject here
+                # would interrupt nodes that are mid-install and haven't rebooted yet.
                 _monitor_install_thread(job_id, cfg, cluster_id)
                 return
             elif _fc_status == 'error':
@@ -1355,20 +1385,63 @@ def _run_deploy(job_id: str, cfg: dict):
                  f'Only {len(registered)} registered.')
             return
 
-        # Set host roles for multi-node
+        # Set host roles + hostnames for multi-node.
+        # Match each registered host to its VM via MAC address so the hostname
+        # in OpenShift matches the libvirt VM name exactly.
         if not is_sno:
             phase('Assigning node roles', 55)
             token = _get_access_token(cfg['offline_token'])
             r = _ai('GET', f'/clusters/{cluster_id}/hosts', token)
             hosts = r.json()
-            for idx, host in enumerate(hosts[:len(vm_names)]):
-                role = 'worker' if idx >= n_control else 'master'
+
+            # Build MAC → vm_name lookup from mac_map
+            mac_to_vm = {mac.lower(): vm for vm, mac in mac_map.items()}
+
+            # Sort hosts by discovery time for stable fallback ordering
+            hosts_sorted = sorted(hosts, key=lambda h: h.get('created_at', ''))
+
+            for idx, host in enumerate(hosts_sorted):
+                host_id = host['id']
+
+                # inventory is a JSON string in the API response — parse it first
+                raw_inv = host.get('inventory') or '{}'
+                if isinstance(raw_inv, str):
+                    try:
+                        inv = json.loads(raw_inv)
+                    except Exception:
+                        inv = {}
+                else:
+                    inv = raw_inv
+
+                nics = inv.get('interfaces') or inv.get('nics') or []
+                host_mac = None
+                for nic in nics:
+                    mac = (nic.get('mac_address') or nic.get('macAddress') or '').lower()
+                    if mac in mac_to_vm:
+                        host_mac = mac
+                        break
+
+                vm_name = mac_to_vm.get(host_mac) if host_mac else None
+
+                # Fallback: assign by index if MAC didn't match
+                if not vm_name and idx < len(vm_names):
+                    vm_name = vm_names[idx]
+
+                role = 'worker' if (vm_name in vm_names[n_control:]) else 'master'
+                url  = f'/infra-envs/{infra_env_id}/hosts/{host_id}'
+
                 try:
-                    _ai('PATCH', f'/infra-envs/{infra_env_id}/hosts/{host["id"]}',
-                        token, {'role': role})
-                    log(f'  Set {host.get("requested_hostname", host["id"])} → {role}')
+                    _ai('PATCH', url, token, {'host_role': role})
+                    matched = 'MAC matched' if host_mac else 'index fallback'
+                    log(f'  Set {vm_name or host_id[:8]} → {role} ({matched})')
                 except Exception as e:
                     log(f'  Role assignment warning: {e}', 'warn')
+
+                if vm_name:
+                    try:
+                        _ai('PATCH', url, token, {'requested_hostname': vm_name})
+                    except Exception:
+                        pass  # hostname rename may be rejected once host is in known state
 
         # ── Step 7: Start installation ────────────────────────────────────────
         phase('Starting OpenShift installation', 60)
@@ -1380,20 +1453,18 @@ def _run_deploy(job_id: str, cfg: dict):
             fail(f'Failed to trigger installation: {e}')
             return
 
-        # Eject discovery ISO from all VMs immediately after install starts.
-        # Without this, the VM reboots back into the ISO instead of the disk,
-        # causing Assisted Installer "pending user action: boot from disk" error.
-        phase('Ejecting discovery ISO', 62)
-        log('Ejecting ISO from VMs so next reboot boots from disk…')
-        _eject_cdroms(vm_names, log)
-
         # ── Step 8: Monitor installation ──────────────────────────────────────
+        # ISO is intentionally left in all VMs throughout installation.
+        # Nodes read RHCOS from the ISO during install — ejecting early causes
+        # "Unable to read from discovery media" failures.
+        # ISO is only ejected per-host when it gets pending-user-action status,
+        # which means RHCOS is already written and the node rebooted back into ISO.
         phase('Installing OpenShift', 65)
         log('Installation in progress — this takes 45–90 minutes…')
         deadline = time.time() + 2 * 3600  # 2 hours
         last_status    = ''
         last_pct       = 0
-        pending_handled = set()  # track VMs already rebooted for pending-user-action
+        pending_handled = set()  # track hosts already handled for pending-user-action
 
         PHASE_PCT = {
             'preparing-for-installation':     65,
@@ -1444,10 +1515,18 @@ def _run_deploy(job_id: str, cfg: dict):
                         h_id     = h.get('id', '')
                         hostname = h.get('requested_hostname') or h_id[:8]
                         if 'pending-user-action' in h_status and h_id not in pending_handled:
-                            log(f'  ⚠ Host {hostname} booted ISO instead of disk — auto-recovering…', 'warn')
-                            _eject_cdroms(vm_names, log)
-                            time.sleep(3)
-                            _reboot_vms(vm_names, log)
+                            # Match API hostname back to actual libvirt VM name.
+                            # requested_hostname may be full FQDN or short name.
+                            vm_match = next(
+                                (v for v in vm_names
+                                 if v == hostname or hostname.startswith(v) or v in hostname),
+                                None
+                            )
+                            target_vms = [vm_match] if vm_match else vm_names
+                            log(f'  ⚠ Host {hostname} rebooted into ISO — ejecting and rebooting {vm_match or "all VMs"}…', 'warn')
+                            _eject_cdroms(target_vms, log)
+                            time.sleep(2)
+                            _reboot_vms(target_vms, log)
                             pending_handled.add(h_id)
                 except Exception:
                     pass  # don't fail monitoring on host-check errors
@@ -1609,11 +1688,17 @@ def _monitor_install_thread(job_id: str, cfg: dict, cluster_id: str):
         'installed':                       100,
     }
 
+    # mac_map: vm_name → MAC — used to match API hosts back to libvirt VM names
+    mac_map = _jobs.get(job_id, {}).get('mac_map', {})
+    mac_to_vm = {mac.lower(): vm for vm, mac in mac_map.items()}
+
     try:
         deadline = time.time() + 2 * 3600
         last_status = ''
         last_pct    = 0
-        pending_handled: set = set()
+        # host_id → last_handled timestamp; persists logic across tight loops
+        # (restarts reset this, but 5-min cooldown prevents immediate re-trigger)
+        pending_last_handled: dict = {}
         consecutive_errors  = 0
 
         while time.time() < deadline:
@@ -1646,19 +1731,51 @@ def _monitor_install_thread(job_id: str, cfg: dict, cluster_id: str):
                     log(f'Installation {status}: {status_info}', 'error')
                     return
 
-                # Auto-recover pending-user-action hosts
+                # Auto-recover per-host pending-user-action.
+                # Match by MAC so we only eject/reboot the specific VM that needs it.
+                # 5-minute cooldown per host prevents re-triggering on service restart.
                 try:
                     hr = _ai('GET', f'/clusters/{cluster_id}/hosts', token)
+                    now = time.time()
                     for h in hr.json():
                         h_status = h.get('status', '')
                         h_id     = h.get('id', '')
                         hostname = h.get('requested_hostname') or h_id[:8]
-                        if 'pending-user-action' in h_status and h_id not in pending_handled:
-                            log(f'  ⚠ Host {hostname} booted ISO — auto-recovering…', 'warn')
-                            _eject_cdroms(vm_names, log)
-                            time.sleep(3)
-                            _reboot_vms(vm_names, log)
-                            pending_handled.add(h_id)
+                        if 'pending-user-action' not in h_status:
+                            continue
+                        last_t = pending_last_handled.get(h_id, 0)
+                        if now - last_t < 300:   # 5-min cooldown
+                            continue
+                        # Find the libvirt VM name via MAC address
+                        # inventory is a JSON string in the API — parse it
+                        raw_inv = h.get('inventory') or '{}'
+                        if isinstance(raw_inv, str):
+                            try:
+                                inv = json.loads(raw_inv)
+                            except Exception:
+                                inv = {}
+                        else:
+                            inv = raw_inv
+                        nics = inv.get('interfaces') or inv.get('nics') or []
+                        vm_match = None
+                        for nic in nics:
+                            mac = (nic.get('mac_address') or nic.get('macAddress') or '').lower()
+                            if mac in mac_to_vm:
+                                vm_match = mac_to_vm[mac]
+                                break
+                        # Fallback: match by hostname string
+                        if not vm_match:
+                            vm_match = next(
+                                (v for v in vm_names
+                                 if v == hostname or hostname.startswith(v) or v in hostname),
+                                None
+                            )
+                        target_vms = [vm_match] if vm_match else vm_names
+                        log(f'  ⚠ Host {hostname} rebooted into ISO — ejecting and rebooting {vm_match or "all VMs"}…', 'warn')
+                        _eject_cdroms(target_vms, log)
+                        time.sleep(2)
+                        _reboot_vms(target_vms, log)
+                        pending_last_handled[h_id] = now
                 except Exception:
                     pass
 
