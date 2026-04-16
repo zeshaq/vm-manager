@@ -18,6 +18,7 @@ import hashlib
 import json
 import os
 import shutil
+import signal
 import subprocess
 import textwrap
 import threading
@@ -77,6 +78,25 @@ def _job_set(job_id: str, **kw):
         if job_id in _jobs:
             _jobs[job_id].update(kw)
             _save_jobs()
+
+# ── Subprocess helpers ────────────────────────────────────────────────────────
+
+def _kill_proc_group(proc: subprocess.Popen) -> None:
+    """Send SIGKILL to the entire process group of *proc*.
+
+    Subprocesses launched with ``start_new_session=True`` become their own
+    session leaders.  ``proc.kill()`` only kills the leader; helper processes
+    forked by openshift-install would be orphaned.  Killing the group ensures
+    full cleanup.
+    """
+    try:
+        pgid = os.getpgid(proc.pid)
+        os.killpg(pgid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass   # already gone
+    except Exception:
+        proc.kill()  # fallback
+
 
 # ── Auth helper ───────────────────────────────────────────────────────────────
 
@@ -632,6 +652,7 @@ def _run_agent_deploy(job_id: str, cfg: dict):
                 [str(binary), 'agent', 'create', 'image', '--dir', str(install_dir)],
                 capture_output=True, text=True, timeout=600,
                 env=sub_env,
+                start_new_session=True,   # isolate from gunicorn signal delivery
             )
             if result.returncode != 0:
                 fail(f'ISO creation failed:\n{result.stderr[-500:]}')
@@ -760,12 +781,13 @@ def _run_agent_deploy(job_id: str, cfg: dict):
              '--dir', str(install_dir), '--log-level', 'info'],
             stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
             text=True, bufsize=1, env=sub_env,
+            start_new_session=True,   # isolate from gunicorn signal delivery
         )
         _job_set(job_id, bootstrap_pid=bootstrap_proc.pid)
 
         for line in bootstrap_proc.stdout:
             if job_id in _stop_jobs:
-                bootstrap_proc.kill()
+                _kill_proc_group(bootstrap_proc)
                 _stop_jobs.discard(job_id)
                 log('Deployment stopped by reset request.', 'warn')
                 return
@@ -799,12 +821,13 @@ def _run_agent_deploy(job_id: str, cfg: dict):
              '--dir', str(install_dir), '--log-level', 'info'],
             stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
             text=True, bufsize=1, env=sub_env,
+            start_new_session=True,   # isolate from gunicorn signal delivery
         )
         _job_set(job_id, install_pid=install_proc.pid)
 
         for line in install_proc.stdout:
             if job_id in _stop_jobs:
-                install_proc.kill()
+                _kill_proc_group(install_proc)
                 _stop_jobs.discard(job_id)
                 log('Deployment stopped by reset request.', 'warn')
                 return
