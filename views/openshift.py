@@ -1392,7 +1392,7 @@ def _run_deploy(job_id: str, cfg: dict):
         # Match each registered host to its VM via MAC address so the hostname
         # in OpenShift matches the libvirt VM name exactly.
         if not is_sno:
-            phase('Assigning node roles', 55)
+            phase('Assigning node roles & hostnames', 55)
             token = _get_access_token(cfg['offline_token'])
             r = _ai('GET', f'/clusters/{cluster_id}/hosts', token)
             hosts = r.json()
@@ -1403,7 +1403,8 @@ def _run_deploy(job_id: str, cfg: dict):
             hosts_sorted = sorted(hosts, key=lambda h: h.get('created_at', ''))
 
             for idx, host in enumerate(hosts_sorted):
-                host_id = host['id']
+                host_id    = host['id']
+                url        = f'/infra-envs/{infra_env_id}/hosts/{host_id}'
 
                 # inventory is a JSON string in the API response — parse it first
                 raw_inv = host.get('inventory') or '{}'
@@ -1424,28 +1425,93 @@ def _run_deploy(job_id: str, cfg: dict):
                         break
 
                 vm_name = mac_to_vm.get(host_mac) if host_mac else None
+                matched = 'MAC' if host_mac else 'index fallback'
 
                 # Fallback: assign by index if MAC didn't match
                 if not vm_name and idx < len(vm_names):
                     vm_name = vm_names[idx]
+                    if not host_mac:
+                        log(f'  ⚠ Host {host_id[:8]}: MAC not matched — using index {idx} → {vm_name}', 'warn')
 
                 role = 'worker' if (vm_name in vm_names[n_control:]) else 'master'
-                url  = f'/infra-envs/{infra_env_id}/hosts/{host_id}'
 
+                # ── Assign role ───────────────────────────────────────────────
                 try:
                     _ai('PATCH', url, token, {'host_role': role})
-                    matched = 'MAC matched' if host_mac else 'index fallback'
-                    log(f'  Set {vm_name or host_id[:8]} → {role} ({matched})')
+                    log(f'  Role: {vm_name or host_id[:8]} → {role} ({matched})')
                 except Exception as e:
-                    log(f'  Role assignment warning: {e}', 'warn')
+                    log(f'  Role assignment warning for {host_id[:8]}: {e}', 'warn')
 
+                # ── Assign hostname (with retries) ────────────────────────────
                 if vm_name:
-                    try:
-                        _ai('PATCH', url, token, {'requested_hostname': vm_name})
-                    except Exception:
-                        pass  # hostname rename may be rejected once host is in known state
+                    assigned = False
+                    for attempt in range(3):
+                        try:
+                            resp = _ai('PATCH', url, token, {'requested_hostname': vm_name})
+                            if resp.status_code < 300:
+                                log(f'  Hostname: {host.get("requested_hostname") or host_id[:8]} → {vm_name} ✓')
+                                assigned = True
+                                break
+                            else:
+                                log(f'  Hostname PATCH attempt {attempt+1} returned {resp.status_code}: {resp.text[:120]}', 'warn')
+                        except Exception as e:
+                            log(f'  Hostname PATCH attempt {attempt+1} error: {e}', 'warn')
+                        time.sleep(5)
+                    if not assigned:
+                        log(f'  ⚠ Could not set hostname for {host_id[:8]} → {vm_name} after 3 attempts', 'warn')
 
-        # ── Step 7: Start installation ────────────────────────────────────────
+        # ── Step 7a: Verify hostnames are set ────────────────────────────────
+        # Poll until all hosts report back the requested_hostname we set.
+        # This confirms the API accepted our rename before we trigger install.
+        if not is_sno:
+            phase('Verifying hostname assignments', 58)
+            log('  Waiting for hostname assignments to be confirmed by API…')
+            for _vhcheck in range(12):   # up to ~60 seconds
+                token = _get_access_token(cfg['offline_token'])
+                r = _ai('GET', f'/clusters/{cluster_id}/hosts', token)
+                current_hosts = r.json()
+                unset = [
+                    h for h in current_hosts
+                    if h.get('requested_hostname') not in vm_names
+                ]
+                if not unset:
+                    log(f'  All {len(current_hosts)} hostnames confirmed ✓')
+                    # Log the final hostname mapping
+                    for h in sorted(current_hosts, key=lambda x: x.get('requested_hostname', '')):
+                        disc = (h.get('inventory') and
+                                json.loads(h['inventory']).get('hostname', '') or h['id'][:8]
+                                if isinstance(h.get('inventory'), str) else h['id'][:8])
+                        log(f'  {disc} → {h.get("requested_hostname")}')
+                    break
+                names_pending = [h.get('requested_hostname') or h['id'][:8] for h in unset]
+                log(f'  {len(unset)} host(s) still showing old hostname: {names_pending} — retrying…')
+                # Re-patch the ones that didn't take
+                for h in unset:
+                    h_id = h['id']
+                    url  = f'/infra-envs/{infra_env_id}/hosts/{h_id}'
+                    # Re-match by MAC to find the right vm_name
+                    raw_inv = h.get('inventory') or '{}'
+                    try:
+                        inv = json.loads(raw_inv) if isinstance(raw_inv, str) else raw_inv
+                    except Exception:
+                        inv = {}
+                    nics = inv.get('interfaces') or inv.get('nics') or []
+                    vm_name = None
+                    for nic in nics:
+                        mac = (nic.get('mac_address') or nic.get('macAddress') or '').lower()
+                        if mac in mac_to_vm:
+                            vm_name = mac_to_vm[mac]
+                            break
+                    if vm_name:
+                        try:
+                            _ai('PATCH', url, token, {'requested_hostname': vm_name})
+                        except Exception:
+                            pass
+                time.sleep(5)
+            else:
+                log('  ⚠ Some hosts may still show auto-discovered hostnames in console (non-fatal)', 'warn')
+
+        # ── Step 7b: Start installation ───────────────────────────────────────
         phase('Starting OpenShift installation', 60)
         try:
             token = _get_access_token(cfg['offline_token'])
