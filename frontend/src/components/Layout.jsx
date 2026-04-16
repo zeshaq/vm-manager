@@ -42,10 +42,11 @@ const vmNavItems = [
 ]
 
 const infraNavItems = [
-  { to: '/docker',     label: 'Docker',       icon: Container },
-  { to: '/kubernetes', label: 'Kubernetes',   icon: Layers },
-  { to: '/network',    label: 'Network',      icon: Network },
-  { to: '/files',      label: 'File Manager', icon: Files },
+  { to: '/docker',           label: 'Docker',           icon: Container },
+  { to: '/kubernetes',       label: 'Kubernetes',       icon: Layers },
+  { to: '/network',          label: 'Network',          icon: Network },
+  { to: '/files',            label: 'File Manager',     icon: Files },
+  { to: '/physical-servers', label: 'Physical Servers', icon: Server },
 ]
 
 const ocpNavItems = [
@@ -154,6 +155,8 @@ export default function Layout({ children, username, onLogout }) {
     if (p === '/system/firewall')     return 'Firewall (UFW)'
     if (p === '/system/security')     return 'Security Overview'
     if (p === '/settings')            return 'System Settings'
+    if (p === '/physical-servers')    return 'Physical Servers'
+    if (p.startsWith('/physical-servers/')) return 'Server Detail'
     return 'Hypercloud'
   }
 
