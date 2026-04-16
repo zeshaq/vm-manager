@@ -14,7 +14,7 @@ import {
   Layers, PlusCircle, RefreshCw, Trash2,
   CheckCircle, XCircle, Loader2, Clock,
   ChevronRight, AlertTriangle, Server, Cpu,
-  Users, Zap,
+  Users, Zap, FileText,
 } from 'lucide-react'
 import api from '../api'
 
@@ -116,7 +116,13 @@ function normalise(job, source) {
   }
 }
 
-function detailPath(job) {
+/** Navigate to the new unified Cluster Dashboard */
+function clusterDashPath(job) {
+  return `/openshift/clusters/${job.source}/${job.id}`
+}
+
+/** Navigate to the installer-specific deployment log page */
+function deployLogPath(job) {
   return job.source === 'assisted'
     ? `/openshift/jobs/${job.id}`
     : `/ocp-agent/jobs/${job.id}`
@@ -358,7 +364,7 @@ export default function OpenShiftClusters() {
           {clusters.map((job, idx) => (
             <div
               key={job.id}
-              onClick={() => navigate(detailPath(job))}
+              onClick={() => navigate(clusterDashPath(job))}
               className={`grid grid-cols-[2fr_1fr_1fr_1fr_2fr_auto] gap-4 px-5 py-4 items-center cursor-pointer hover:bg-navy-700/60 transition-colors ${
                 idx < clusters.length - 1 ? 'border-b border-navy-700' : ''
               }`}
@@ -406,11 +412,18 @@ export default function OpenShiftClusters() {
               {/* Actions */}
               <div className="flex items-center gap-1" onClick={e => e.stopPropagation()}>
                 <button
-                  onClick={() => navigate(detailPath(job))}
+                  onClick={() => navigate(clusterDashPath(job))}
                   className="p-1.5 text-slate-500 hover:text-sky-400 hover:bg-navy-600 rounded transition-colors"
-                  title="View details"
+                  title="Cluster dashboard"
                 >
                   <ChevronRight size={15} />
+                </button>
+                <button
+                  onClick={() => navigate(deployLogPath(job))}
+                  className="p-1.5 text-slate-500 hover:text-indigo-400 hover:bg-navy-600 rounded transition-colors"
+                  title="Deployment log"
+                >
+                  <FileText size={13} />
                 </button>
                 <button
                   onClick={() => deleteCluster(job)}
