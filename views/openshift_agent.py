@@ -1349,7 +1349,12 @@ def delete_job(job_id):
                     dom = conn.lookupByName(nm)
                     if dom.isActive():
                         dom.destroy()
-                    dom.undefine()
+                    # VMs use EFI firmware which creates an NVRAM file.
+                    # undefine() fails on EFI domains unless the NVRAM flag is set.
+                    try:
+                        dom.undefineFlags(libvirt.VIR_DOMAIN_UNDEFINE_NVRAM)
+                    except libvirt.libvirtError:
+                        dom.undefine()   # fallback for non-EFI or older libvirt
                     destroyed_vms.append(nm)
                 except libvirt.libvirtError:
                     pass   # VM already gone — that's fine
@@ -1533,7 +1538,11 @@ def reset_job(job_id):
                     dom = conn.lookupByName(nm)
                     if dom.isActive():
                         dom.destroy()
-                    dom.undefine()
+                    # EFI domains have an NVRAM file — must use NVRAM flag
+                    try:
+                        dom.undefineFlags(libvirt.VIR_DOMAIN_UNDEFINE_NVRAM)
+                    except libvirt.libvirtError:
+                        dom.undefine()   # fallback for non-EFI or older libvirt
                     destroyed.append(nm)
                     _log(f'  Destroyed VM {nm} ✓')
                 except libvirt.libvirtError:
