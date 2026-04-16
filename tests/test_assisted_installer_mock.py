@@ -27,7 +27,7 @@ class TestAiHelper:
         return r
 
     def test_get_request_uses_correct_url(self):
-        with patch('views.openshift._req') as mock_req:
+        with patch('views.openshift.ai_client._req') as mock_req:
             mock_req.request.return_value = self._mock_response(200, {'id': 'cluster-1'})
             ocp._ai('GET', '/clusters/cluster-1', 'fake-token')
             args, kwargs = mock_req.request.call_args
@@ -35,7 +35,7 @@ class TestAiHelper:
             assert 'clusters/cluster-1' in args[1]
 
     def test_patch_sends_json_body(self):
-        with patch('views.openshift._req') as mock_req:
+        with patch('views.openshift.ai_client._req') as mock_req:
             mock_req.request.return_value = self._mock_response(200)
             ocp._ai('PATCH', '/infra-envs/env1/hosts/h1', 'token',
                     {'requested_hostname': 'master-0'})
@@ -43,7 +43,7 @@ class TestAiHelper:
             assert kwargs.get('json') == {'requested_hostname': 'master-0'}
 
     def test_authorization_header_sent(self):
-        with patch('views.openshift._req') as mock_req:
+        with patch('views.openshift.ai_client._req') as mock_req:
             mock_req.request.return_value = self._mock_response(200)
             ocp._ai('GET', '/clusters', 'my-bearer-token')
             _, kwargs = mock_req.request.call_args
@@ -63,7 +63,7 @@ class TestGetAccessToken:
         mock_resp.json.return_value = {'access_token': 'eyJhbGciOiJSUzI1NiJ9.test'}
         mock_resp.raise_for_status = MagicMock()
 
-        with patch('views.openshift._req') as mock_req:
+        with patch('views.openshift.ai_client._req') as mock_req:
             mock_req.post.return_value = mock_resp
             token = ocp._get_access_token('offline-token-xyz')
             assert token == 'eyJhbGciOiJSUzI1NiJ9.test'
@@ -74,7 +74,7 @@ class TestGetAccessToken:
         mock_resp.status_code = 401
         mock_resp.text = 'Unauthorized'
 
-        with patch('views.openshift._req') as mock_req:
+        with patch('views.openshift.ai_client._req') as mock_req:
             mock_req.post.return_value = mock_resp
             with pytest.raises((RuntimeError, Exception)):
                 ocp._get_access_token('bad-offline-token')
@@ -138,9 +138,9 @@ class TestMonitoringStatusTransitions:
         def fake_collect_creds(*args, **kwargs):
             ocp._job_set(job_id, status='complete', progress=100)
 
-        with patch.object(ocp, '_ai', side_effect=fake_ai), \
-             patch.object(ocp, '_get_access_token', return_value='tok'), \
-             patch.object(ocp, '_collect_credentials', side_effect=fake_collect_creds), \
+        with patch('views.openshift.monitoring._ai', side_effect=fake_ai), \
+             patch('views.openshift.monitoring._get_access_token', return_value='tok'), \
+             patch('views.openshift.monitoring._collect_credentials', side_effect=fake_collect_creds), \
              patch('time.sleep'):
             ocp._monitor_install_thread(job_id, {
                 'offline_token': 'tok',
@@ -176,8 +176,8 @@ class TestMonitoringStatusTransitions:
             }
             return r
 
-        with patch.object(ocp, '_ai', side_effect=fake_ai), \
-             patch.object(ocp, '_get_access_token', return_value='tok'), \
+        with patch('views.openshift.monitoring._ai', side_effect=fake_ai), \
+             patch('views.openshift.monitoring._get_access_token', return_value='tok'), \
              patch('time.sleep'):
             ocp._monitor_install_thread(job_id, {
                 'offline_token': 'tok',
@@ -234,9 +234,9 @@ class TestOperatorTracking:
             poll['n'] += 1
             return r
 
-        with patch.object(ocp, '_ai', side_effect=fake_ai), \
-             patch.object(ocp, '_get_access_token', return_value='tok'), \
-             patch.object(ocp, '_collect_credentials'), \
+        with patch('views.openshift.monitoring._ai', side_effect=fake_ai), \
+             patch('views.openshift.monitoring._get_access_token', return_value='tok'), \
+             patch('views.openshift.monitoring._collect_credentials'), \
              patch('time.sleep'):
             ocp._monitor_install_thread(job_id, {
                 'offline_token': 'tok',
@@ -330,11 +330,11 @@ class TestPendingUserActionRecovery:
         ejected = []
         rebooted = []
 
-        with patch.object(ocp, '_ai', side_effect=fake_ai), \
-             patch.object(ocp, '_get_access_token', return_value='tok'), \
-             patch.object(ocp, '_collect_credentials'), \
-             patch.object(ocp, '_eject_cdroms', side_effect=lambda vms, log: ejected.extend(vms)), \
-             patch.object(ocp, '_reboot_vms', side_effect=lambda vms, log: rebooted.extend(vms)), \
+        with patch('views.openshift.monitoring._ai', side_effect=fake_ai), \
+             patch('views.openshift.monitoring._get_access_token', return_value='tok'), \
+             patch('views.openshift.monitoring._collect_credentials'), \
+             patch('views.openshift.monitoring._eject_cdroms', side_effect=lambda vms, log: ejected.extend(vms)), \
+             patch('views.openshift.monitoring._reboot_vms', side_effect=lambda vms, log: rebooted.extend(vms)), \
              patch('time.sleep'):
             ocp._monitor_install_thread(job_id, {
                 'offline_token': 'tok',

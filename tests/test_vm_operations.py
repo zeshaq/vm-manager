@@ -64,21 +64,17 @@ class TestBootOrder:
     def test_openshift_vm_xml_boot_order(self):
         """openshift.py VM XML should have disk=1, cdrom=2."""
         import views.openshift as ocp
+        import views.openshift.vm_ops as vm_ops_mod
 
-        # Build a minimal XML from the template in openshift.py
-        # by inspecting the _create_vm function's XML template
+        # Inspect the vm_ops module where _vm_xml is defined
         import inspect
-        src = inspect.getsource(ocp)
+        src = inspect.getsource(vm_ops_mod)
 
         # Find the XML template fragment
         assert "boot order='1'" in src, "Should have boot order='1'"
         assert "boot order='2'" in src, "Should have boot order='2'"
 
         # Find the positions to verify disk comes before CDROM in boot order
-        pos_disk_order_1 = src.find("device='disk'")
-        pos_cdrom_order_2 = src.find("device='cdrom'")
-
-        # disk definition should appear in the XML before cdrom
         # (disk gets order=1, cdrom gets order=2)
         xml_template_start = src.find('<domain type=')
         if xml_template_start > 0:
