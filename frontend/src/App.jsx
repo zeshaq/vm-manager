@@ -22,6 +22,7 @@ import SystemProcesses from './pages/SystemProcesses'
 import SystemServices from './pages/SystemServices'
 import Firewall from './pages/Firewall'
 import Security from './pages/Security'
+import OpenShiftClusters from './pages/OpenShiftClusters'
 import OpenShiftList from './pages/OpenShiftList'
 import OpenShiftDeploy from './pages/OpenShift'
 import OpenShiftJob from './pages/OpenShiftJob'
@@ -94,6 +95,7 @@ export default function App() {
                 <Route path="/system/services"  element={<SystemServices />} />
                 <Route path="/system/firewall"  element={<Firewall />} />
                 <Route path="/system/security"  element={<Security />} />
+                <Route path="/openshift/clusters"     element={<OpenShiftClusters />} />
                 <Route path="/openshift"              element={<OpenShiftList />} />
                 <Route path="/openshift/deploy"      element={<OpenShiftDeploy />} />
                 <Route path="/openshift/jobs/:jobId" element={<OpenShiftJob />} />

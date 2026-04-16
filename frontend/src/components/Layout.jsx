@@ -48,8 +48,9 @@ const infraNavItems = [
 ]
 
 const ocpNavItems = [
-  { to: '/openshift', label: 'Assisted Install', icon: Boxes },
-  { to: '/ocp-agent', label: 'Agent Install',    icon: Terminal },
+  { to: '/openshift/clusters', label: 'OpenShift Clusters', icon: Layers },
+  { to: '/openshift',          label: 'Assisted Install',   icon: Boxes  },
+  { to: '/ocp-agent',          label: 'Agent Install',      icon: Terminal },
 ]
 
 const systemNavItems = [
@@ -138,9 +139,13 @@ export default function Layout({ children, username, onLogout }) {
     if (p === '/files')               return 'File Manager'
     if (p === '/images')              return 'Images'
     if (p === '/kubernetes')          return 'Kubernetes'
-    if (p === '/openshift')            return 'OpenShift Clusters'
+    if (p === '/openshift/clusters')   return 'OpenShift Clusters'
+    if (p === '/openshift')            return 'Assisted Installer Jobs'
     if (p === '/openshift/deploy')    return 'New OpenShift Deployment'
     if (p.startsWith('/openshift/jobs/')) return 'OpenShift Deployment'
+    if (p === '/ocp-agent')              return 'Agent Installer Jobs'
+    if (p === '/ocp-agent/deploy')       return 'New Agent Deployment'
+    if (p.startsWith('/ocp-agent/jobs/'))return 'Agent Deployment'
     if (p === '/system/processes')    return 'Processes'
     if (p === '/system/services')     return 'System Services'
     if (p === '/system/firewall')     return 'Firewall (UFW)'

@@ -31,10 +31,43 @@ def _make_libvirt_stub():
     return lv
 
 
-for mod_name in ('libvirt', 'psutil', 'simplepam'):
+def _make_flask_limiter_stub():
+    """Stub flask_limiter so tests run without the package installed."""
+    mod = types.ModuleType('flask_limiter')
+    # Limiter must be callable and return a decorator-like object
+    limiter_instance = MagicMock()
+    limiter_instance.limit = lambda *a, **kw: (lambda f: f)  # pass-through decorator
+    limiter_instance.init_app = MagicMock()
+    mod.Limiter = MagicMock(return_value=limiter_instance)
+    # flask_limiter.util submodule
+    util_mod = types.ModuleType('flask_limiter.util')
+    util_mod.get_remote_address = MagicMock(return_value='127.0.0.1')
+    sys.modules['flask_limiter.util'] = util_mod
+    return mod
+
+
+def _make_docker_stub():
+    """Stub docker + docker.errors so tests run without docker-py installed."""
+    docker_mod = types.ModuleType('docker')
+    docker_mod.from_env = MagicMock(return_value=MagicMock())
+    docker_mod.DockerClient = MagicMock()
+    errors_mod = types.ModuleType('docker.errors')
+    errors_mod.DockerException = Exception
+    errors_mod.NotFound        = Exception
+    errors_mod.APIError        = Exception
+    sys.modules['docker.errors'] = errors_mod
+    docker_mod.errors = errors_mod
+    return docker_mod
+
+
+for mod_name in ('libvirt', 'psutil', 'simplepam', 'flask_limiter', 'docker'):
     if mod_name not in sys.modules:
         if mod_name == 'libvirt':
             sys.modules[mod_name] = _make_libvirt_stub()
+        elif mod_name == 'flask_limiter':
+            sys.modules[mod_name] = _make_flask_limiter_stub()
+        elif mod_name == 'docker':
+            sys.modules[mod_name] = _make_docker_stub()
         else:
             sys.modules[mod_name] = MagicMock()
 

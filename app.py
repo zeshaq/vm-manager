@@ -46,6 +46,7 @@ from views.images import images_bp
 from views.console import console_bp
 from views.system_mgmt import system_bp
 from views.openshift import ocp_bp
+from views.openshift_agent import agent_bp
 
 app = Flask(__name__, static_folder='frontend/dist/assets', static_url_path='/assets')
 
@@ -100,6 +101,7 @@ app.register_blueprint(images_bp)
 app.register_blueprint(console_bp)
 app.register_blueprint(system_bp)
 app.register_blueprint(ocp_bp)
+app.register_blueprint(agent_bp)
 
 # Apply WebSocket fix AFTER blueprint registration so it wraps the fully
 # configured Flask app.
