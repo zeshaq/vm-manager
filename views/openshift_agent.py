@@ -1221,23 +1221,89 @@ def delete_job(job_id):
     if err:
         return err
 
+    job = _jobs.get(job_id)
+    if not job:
+        return jsonify({'error': 'Job not found'}), 404
+
+    # Stop any running deployment thread first
     if job_id in _running_jobs:
         _stop_jobs.add(job_id)
         _running_jobs.discard(job_id)
-        time.sleep(0.5)
+        time.sleep(1)
 
-    # Clean up the ISO copy in /var/lib/libvirt/images/ if present
-    libvirt_iso = Path('/var/lib/libvirt/images') / f'ocp-agent-{job_id}.iso'
-    try:
-        libvirt_iso.unlink(missing_ok=True)
-    except Exception:
-        pass
+    destroyed_vms  = []
+    destroyed_disks = []
 
+    # ── Destroy VMs ───────────────────────────────────────────────────────────
+    # Collect VM names from job.vms and from config.nodes (in case VMs were
+    # created but not yet tracked in job.vms at the time of failure)
+    vm_names  = list(job.get('vms', []))
+    nodes_cfg = job.get('config', {}).get('nodes', []) or job.get('nodes', [])
+    for n in nodes_cfg:
+        nm = n.get('hostname') or n.get('name', '')
+        if nm and nm not in vm_names:
+            vm_names.append(nm)
+
+    storage_path = Path(job.get('config', {}).get('storage_path',
+                                                   '/var/lib/libvirt/images'))
+
+    if vm_names:
+        try:
+            conn = libvirt.open('qemu:///system')
+            for nm in vm_names:
+                try:
+                    dom = conn.lookupByName(nm)
+                    if dom.isActive():
+                        dom.destroy()
+                    dom.undefine()
+                    destroyed_vms.append(nm)
+                except libvirt.libvirtError:
+                    pass   # VM already gone — that's fine
+            conn.close()
+        except Exception:
+            pass  # libvirt unavailable — best-effort
+
+        # Remove qcow2 disk images
+        for nm in vm_names:
+            for disk in storage_path.glob(f'{nm}*.qcow2'):
+                try:
+                    disk.unlink()
+                    destroyed_disks.append(disk.name)
+                except OSError:
+                    pass
+
+    # ── Remove ISO copies ─────────────────────────────────────────────────────
+    for iso_path in [
+        Path('/var/lib/libvirt/images') / f'ocp-agent-{job_id}.iso',
+        *(
+            [Path(job['iso_path'])]
+            if job.get('iso_path') and Path(job['iso_path']).exists()
+            else []
+        ),
+    ]:
+        try:
+            iso_path.unlink(missing_ok=True)
+        except Exception:
+            pass
+
+    # ── Remove job work directory ─────────────────────────────────────────────
+    job_dir = WORK_DIR / job_id
+    if job_dir.exists():
+        try:
+            shutil.rmtree(job_dir)
+        except Exception:
+            pass
+
+    # ── Remove job record ─────────────────────────────────────────────────────
     with _lock:
         _jobs.pop(job_id, None)
         _save_jobs()
 
-    return jsonify({'deleted': job_id})
+    return jsonify({
+        'deleted':        job_id,
+        'destroyed_vms':  destroyed_vms,
+        'destroyed_disks': destroyed_disks,
+    })
 
 
 @agent_bp.route('/api/ocp-agent/jobs/<job_id>/kubeconfig')
