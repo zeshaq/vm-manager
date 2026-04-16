@@ -1,0 +1,471 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Hypercloud — VM Manager</title>
+  <meta name="description" content="Open-source KVM virtual machine manager with OpenShift deployment support. Self-hosted, web-based, built for bare metal.">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg:        #0a0f1e;
+      --bg2:       #0f172a;
+      --card:      #111827;
+      --border:    #1e293b;
+      --accent:    #3b82f6;
+      --accent2:   #6366f1;
+      --green:     #22c55e;
+      --text:      #f1f5f9;
+      --muted:     #94a3b8;
+      --red:       #ef4444;
+    }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      line-height: 1.6;
+    }
+
+    a { color: var(--accent); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+
+    /* ── NAV ── */
+    nav {
+      position: sticky; top: 0; z-index: 100;
+      background: rgba(10,15,30,0.85);
+      backdrop-filter: blur(12px);
+      border-bottom: 1px solid var(--border);
+      padding: 0 2rem;
+      display: flex; align-items: center; justify-content: space-between;
+      height: 60px;
+    }
+    .nav-logo { display: flex; align-items: center; gap: 10px; font-weight: 700; font-size: 1.1rem; }
+    .nav-logo svg { color: var(--accent); }
+    .nav-links { display: flex; gap: 2rem; font-size: 0.9rem; color: var(--muted); }
+    .nav-links a { color: var(--muted); }
+    .nav-links a:hover { color: var(--text); text-decoration: none; }
+    .nav-cta {
+      background: var(--accent); color: #fff;
+      padding: 0.45rem 1.1rem; border-radius: 6px;
+      font-size: 0.85rem; font-weight: 600;
+    }
+    .nav-cta:hover { background: #2563eb; text-decoration: none; }
+
+    /* ── HERO ── */
+    .hero {
+      text-align: center;
+      padding: 100px 2rem 80px;
+      background: radial-gradient(ellipse 80% 50% at 50% 0%, rgba(59,130,246,0.12) 0%, transparent 70%);
+    }
+    .hero-badge {
+      display: inline-flex; align-items: center; gap: 6px;
+      background: rgba(59,130,246,0.1); border: 1px solid rgba(59,130,246,0.3);
+      color: var(--accent); border-radius: 999px;
+      padding: 4px 14px; font-size: 0.78rem; font-weight: 600;
+      margin-bottom: 1.5rem; letter-spacing: 0.03em;
+    }
+    .hero h1 {
+      font-size: clamp(2.2rem, 5vw, 3.8rem);
+      font-weight: 800; line-height: 1.15;
+      background: linear-gradient(135deg, #f1f5f9 30%, #94a3b8);
+      -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+      margin-bottom: 1.2rem;
+    }
+    .hero p {
+      font-size: clamp(1rem, 2vw, 1.2rem);
+      color: var(--muted); max-width: 600px; margin: 0 auto 2.5rem;
+    }
+    .hero-buttons { display: flex; gap: 1rem; justify-content: center; flex-wrap: wrap; }
+    .btn-primary {
+      background: var(--accent); color: #fff;
+      padding: 0.75rem 1.8rem; border-radius: 8px;
+      font-weight: 600; font-size: 0.95rem;
+      display: inline-flex; align-items: center; gap: 8px;
+      transition: background 0.2s;
+    }
+    .btn-primary:hover { background: #2563eb; text-decoration: none; }
+    .btn-secondary {
+      background: var(--card); color: var(--text);
+      border: 1px solid var(--border);
+      padding: 0.75rem 1.8rem; border-radius: 8px;
+      font-weight: 600; font-size: 0.95rem;
+      display: inline-flex; align-items: center; gap: 8px;
+      transition: border-color 0.2s;
+    }
+    .btn-secondary:hover { border-color: var(--accent); text-decoration: none; }
+
+    /* ── INSTALL ── */
+    .install-bar {
+      max-width: 620px; margin: 2rem auto 0;
+      background: var(--card); border: 1px solid var(--border);
+      border-radius: 10px; overflow: hidden;
+    }
+    .install-bar-header {
+      display: flex; align-items: center; gap: 8px;
+      padding: 10px 16px; border-bottom: 1px solid var(--border);
+      font-size: 0.75rem; color: var(--muted);
+    }
+    .dot { width: 10px; height: 10px; border-radius: 50%; }
+    .install-bar code {
+      display: block; padding: 14px 16px;
+      font-family: 'SF Mono', 'Fira Code', monospace;
+      font-size: 0.85rem; color: var(--green);
+      white-space: nowrap; overflow-x: auto;
+    }
+
+    /* ── STATS ── */
+    .stats {
+      display: flex; justify-content: center; gap: 3rem;
+      flex-wrap: wrap; padding: 3rem 2rem;
+      border-top: 1px solid var(--border);
+      border-bottom: 1px solid var(--border);
+    }
+    .stat { text-align: center; }
+    .stat-num { font-size: 2rem; font-weight: 800; color: var(--accent); }
+    .stat-label { font-size: 0.82rem; color: var(--muted); margin-top: 2px; }
+
+    /* ── SECTION ── */
+    section { padding: 80px 2rem; max-width: 1100px; margin: 0 auto; }
+    .section-label {
+      font-size: 0.75rem; font-weight: 700; letter-spacing: 0.1em;
+      text-transform: uppercase; color: var(--accent); margin-bottom: 0.75rem;
+    }
+    .section-title {
+      font-size: clamp(1.6rem, 3vw, 2.4rem);
+      font-weight: 800; margin-bottom: 0.75rem;
+    }
+    .section-sub { color: var(--muted); max-width: 540px; margin-bottom: 3rem; font-size: 1rem; }
+
+    /* ── FEATURES ── */
+    .features-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      gap: 1.5rem;
+    }
+    .feature-card {
+      background: var(--card); border: 1px solid var(--border);
+      border-radius: 12px; padding: 1.5rem;
+      transition: border-color 0.2s, transform 0.2s;
+    }
+    .feature-card:hover { border-color: var(--accent); transform: translateY(-2px); }
+    .feature-icon {
+      width: 42px; height: 42px; border-radius: 10px;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 1.3rem; margin-bottom: 1rem;
+    }
+    .feature-card h3 { font-size: 1rem; font-weight: 700; margin-bottom: 0.4rem; }
+    .feature-card p { font-size: 0.87rem; color: var(--muted); line-height: 1.55; }
+
+    /* ── HOW IT WORKS ── */
+    .steps { display: flex; flex-direction: column; gap: 0; }
+    .step {
+      display: flex; gap: 1.5rem; align-items: flex-start;
+      padding: 1.5rem 0; border-bottom: 1px solid var(--border);
+    }
+    .step:last-child { border-bottom: none; }
+    .step-num {
+      flex-shrink: 0; width: 36px; height: 36px;
+      border-radius: 50%; background: rgba(59,130,246,0.15);
+      border: 1px solid rgba(59,130,246,0.4);
+      display: flex; align-items: center; justify-content: center;
+      font-weight: 700; font-size: 0.85rem; color: var(--accent);
+    }
+    .step-content h3 { font-size: 1rem; font-weight: 700; margin-bottom: 0.3rem; }
+    .step-content p { font-size: 0.87rem; color: var(--muted); }
+
+    /* ── OPENSHIFT ── */
+    .ocp-grid {
+      display: grid; grid-template-columns: 1fr 1fr; gap: 2rem;
+    }
+    @media (max-width: 700px) { .ocp-grid { grid-template-columns: 1fr; } }
+    .ocp-card {
+      background: var(--card); border: 1px solid var(--border);
+      border-radius: 12px; padding: 1.5rem;
+    }
+    .ocp-card h3 { font-size: 1rem; font-weight: 700; margin-bottom: 0.75rem; display: flex; align-items: center; gap: 8px; }
+    .ocp-card ul { list-style: none; display: flex; flex-direction: column; gap: 0.5rem; }
+    .ocp-card li { font-size: 0.87rem; color: var(--muted); display: flex; align-items: flex-start; gap: 8px; }
+    .ocp-card li::before { content: '✓'; color: var(--green); flex-shrink: 0; font-weight: 700; }
+
+    /* ── INSTALL STEPS ── */
+    .install-steps {
+      background: var(--card); border: 1px solid var(--border);
+      border-radius: 12px; overflow: hidden;
+    }
+    .install-step {
+      display: flex; align-items: flex-start; gap: 1rem;
+      padding: 1.25rem 1.5rem; border-bottom: 1px solid var(--border);
+    }
+    .install-step:last-child { border-bottom: none; }
+    .install-step-num {
+      flex-shrink: 0; width: 28px; height: 28px; border-radius: 50%;
+      background: var(--accent); color: #fff;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 0.78rem; font-weight: 700;
+    }
+    .install-step h4 { font-size: 0.9rem; font-weight: 600; margin-bottom: 4px; }
+    .install-step code {
+      font-family: 'SF Mono', 'Fira Code', monospace;
+      font-size: 0.82rem; color: var(--green);
+      background: rgba(0,0,0,0.3); padding: 3px 8px; border-radius: 4px;
+    }
+    .install-step p { font-size: 0.83rem; color: var(--muted); }
+
+    /* ── FOOTER ── */
+    footer {
+      border-top: 1px solid var(--border);
+      padding: 2.5rem 2rem;
+      text-align: center;
+      color: var(--muted);
+      font-size: 0.85rem;
+    }
+    footer a { color: var(--muted); }
+    footer a:hover { color: var(--text); }
+
+    @media (max-width: 600px) {
+      .nav-links { display: none; }
+      .stats { gap: 2rem; }
+    }
+  </style>
+</head>
+<body>
+
+<!-- NAV -->
+<nav>
+  <div class="nav-logo">
+    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      <rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/>
+    </svg>
+    Hypercloud
+  </div>
+  <div class="nav-links">
+    <a href="#features">Features</a>
+    <a href="#openshift">OpenShift</a>
+    <a href="#install">Install</a>
+    <a href="https://github.com/zeshaq/vm-manager">GitHub</a>
+  </div>
+  <a class="nav-cta" href="https://github.com/zeshaq/vm-manager">View on GitHub</a>
+</nav>
+
+<!-- HERO -->
+<div class="hero">
+  <div class="hero-badge">
+    <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="12" r="10"/></svg>
+    Open Source · Self-Hosted · KVM
+  </div>
+  <h1>Virtual Machine Manager<br>for Bare Metal</h1>
+  <p>Create, manage, and monitor KVM virtual machines from a modern web interface. Deploy full OpenShift clusters with a single wizard.</p>
+  <div class="hero-buttons">
+    <a class="btn-primary" href="#install">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+      Get Started
+    </a>
+    <a class="btn-secondary" href="https://github.com/zeshaq/vm-manager">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.3 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 21.795 24 17.295 24 12c0-6.63-5.37-12-12-12"/></svg>
+      GitHub
+    </a>
+  </div>
+
+  <div class="install-bar">
+    <div class="install-bar-header">
+      <div class="dot" style="background:#ef4444"></div>
+      <div class="dot" style="background:#f59e0b"></div>
+      <div class="dot" style="background:#22c55e"></div>
+      <span style="margin-left:4px">terminal</span>
+    </div>
+    <code>sudo bash &lt;(curl -fsSL https://raw.githubusercontent.com/zeshaq/vm-manager/main/install.sh)</code>
+  </div>
+</div>
+
+<!-- STATS -->
+<div class="stats">
+  <div class="stat"><div class="stat-num">KVM</div><div class="stat-label">Native hypervisor</div></div>
+  <div class="stat"><div class="stat-num">OCP</div><div class="stat-label">OpenShift deployment</div></div>
+  <div class="stat"><div class="stat-num">SNO</div><div class="stat-label">Single-node support</div></div>
+  <div class="stat"><div class="stat-num">3-node</div><div class="stat-label">Compact clusters</div></div>
+  <div class="stat"><div class="stat-num">5-node</div><div class="stat-label">Full HA clusters</div></div>
+</div>
+
+<!-- FEATURES -->
+<section id="features">
+  <div class="section-label">Features</div>
+  <h2 class="section-title">Everything you need to manage VMs</h2>
+  <p class="section-sub">A full-featured web UI for KVM — from basic VM creation to full OpenShift cluster deployment.</p>
+
+  <div class="features-grid">
+    <div class="feature-card">
+      <div class="feature-icon" style="background:rgba(59,130,246,0.1)">🖥️</div>
+      <h3>VM Lifecycle Management</h3>
+      <p>Create, start, stop, pause, and delete KVM virtual machines from a clean web interface. Bulk operations supported.</p>
+    </div>
+    <div class="feature-card">
+      <div class="feature-icon" style="background:rgba(34,197,94,0.1)">📊</div>
+      <h3>Real-time Monitoring</h3>
+      <p>Live CPU, memory, and disk stats per VM. Per-host stage tracking during OpenShift installation with stuck node detection.</p>
+    </div>
+    <div class="feature-card">
+      <div class="feature-icon" style="background:rgba(239,68,68,0.1)">🖱️</div>
+      <h3>Browser Console</h3>
+      <p>Full VNC console access to any VM directly in the browser via noVNC — no SSH or separate client needed.</p>
+    </div>
+    <div class="feature-card">
+      <div class="feature-icon" style="background:rgba(99,102,241,0.1)">☁️</div>
+      <h3>OpenShift Deployment</h3>
+      <p>Deploy SNO, compact 3-node, or full HA 5-node OpenShift clusters using the Assisted Installer or Agent-based installer.</p>
+    </div>
+    <div class="feature-card">
+      <div class="feature-icon" style="background:rgba(245,158,11,0.1)">🔐</div>
+      <h3>Kubernetes on KVM</h3>
+      <p>Deploy single-node or multi-node Kubernetes clusters on KVM VMs using cloud-init and automated node provisioning.</p>
+    </div>
+    <div class="feature-card">
+      <div class="feature-icon" style="background:rgba(20,184,166,0.1)">🌐</div>
+      <h3>Network Management</h3>
+      <p>Manage libvirt bridges and networks. Static IP assignment for OpenShift nodes with NMState config generation.</p>
+    </div>
+  </div>
+</section>
+
+<!-- OPENSHIFT -->
+<section id="openshift" style="background:var(--bg2); max-width:100%; padding: 80px 2rem;">
+  <div style="max-width:1100px; margin:0 auto;">
+    <div class="section-label">OpenShift</div>
+    <h2 class="section-title">Deploy OpenShift on bare metal KVM</h2>
+    <p class="section-sub">Two deployment modes — both fully automated with live progress tracking and auto-recovery.</p>
+
+    <div class="ocp-grid">
+      <div class="ocp-card">
+        <h3>
+          <span style="background:rgba(239,68,68,0.15);padding:3px 8px;border-radius:5px;font-size:0.75rem;color:#ef4444">Assisted Installer</span>
+          Cloud-connected
+        </h3>
+        <ul>
+          <li>Uses Red Hat Assisted Installer API (console.redhat.com)</li>
+          <li>Full-ISO discovery with real-time download progress</li>
+          <li>Automatic MAC-based node identification</li>
+          <li>Per-host stage tracking and stuck node detection</li>
+          <li>Auto-recovery for pending-user-action nodes</li>
+          <li>Operator availability tracking during finalizing</li>
+          <li>Supports SNO, 3-node compact, 5-node HA</li>
+        </ul>
+      </div>
+      <div class="ocp-card">
+        <h3>
+          <span style="background:rgba(59,130,246,0.15);padding:3px 8px;border-radius:5px;font-size:0.75rem;color:#3b82f6">Agent Installer</span>
+          Air-gapped
+        </h3>
+        <ul>
+          <li>Uses openshift-install agent create image</li>
+          <li>Works fully offline / air-gapped environments</li>
+          <li>PyYAML-based agent-config for correct indentation</li>
+          <li>AppArmor-aware ISO placement for QEMU</li>
+          <li>Per-node CPU / RAM / disk configuration</li>
+          <li>7-step task table with live duration tracking</li>
+          <li>Auto MAC assignment and NMState static IP config</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- HOW IT WORKS -->
+<section>
+  <div class="section-label">How it works</div>
+  <h2 class="section-title">Up and running in minutes</h2>
+  <p class="section-sub">Install once on any Ubuntu server with KVM support. Access from any browser on your network.</p>
+
+  <div class="steps">
+    <div class="step">
+      <div class="step-num">1</div>
+      <div class="step-content">
+        <h3>Run the installer</h3>
+        <p>One command installs all dependencies (QEMU, libvirt, Python, Node), clones the repo, builds the frontend, and registers a systemd service.</p>
+      </div>
+    </div>
+    <div class="step">
+      <div class="step-num">2</div>
+      <div class="step-content">
+        <h3>Open the web UI</h3>
+        <p>Navigate to <code>http://your-server:5000</code> from any browser. Log in with your Linux username and password.</p>
+      </div>
+    </div>
+    <div class="step">
+      <div class="step-num">3</div>
+      <div class="step-content">
+        <h3>Create virtual machines</h3>
+        <p>Use the VM creation wizard to define CPU, RAM, disk, and network. VMs start immediately.</p>
+      </div>
+    </div>
+    <div class="step">
+      <div class="step-num">4</div>
+      <div class="step-content">
+        <h3>Deploy OpenShift (optional)</h3>
+        <p>Use the OpenShift wizard to configure cluster name, node count, and credentials. The platform creates all VMs, downloads the ISO, and monitors installation end-to-end.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- INSTALL -->
+<section id="install" style="background:var(--bg2); max-width:100%; padding: 80px 2rem;">
+  <div style="max-width:700px; margin:0 auto;">
+    <div class="section-label">Installation</div>
+    <h2 class="section-title">Install on Ubuntu 22.04 / 24.04</h2>
+    <p class="section-sub" style="margin-bottom:2rem">Requires a bare metal or nested-virt host with KVM support. Tested on Ubuntu 22.04 LTS and 24.04 LTS.</p>
+
+    <div class="install-steps">
+      <div class="install-step">
+        <div class="install-step-num">1</div>
+        <div>
+          <h4>Run the one-line installer</h4>
+          <p style="margin-bottom:6px">Downloads and runs the install script as root.</p>
+          <code>sudo bash &lt;(curl -fsSL https://raw.githubusercontent.com/zeshaq/vm-manager/main/install.sh)</code>
+        </div>
+      </div>
+      <div class="install-step">
+        <div class="install-step-num">2</div>
+        <div>
+          <h4>Custom options (optional)</h4>
+          <p style="margin-bottom:6px">Override defaults with flags:</p>
+          <code>sudo bash install.sh --port 8080 --branch develop</code>
+        </div>
+      </div>
+      <div class="install-step">
+        <div class="install-step-num">3</div>
+        <div>
+          <h4>Open the UI</h4>
+          <p>Visit <code>http://&lt;server-ip&gt;:5000</code> in your browser. Login with your Linux credentials.</p>
+        </div>
+      </div>
+      <div class="install-step">
+        <div class="install-step-num">4</div>
+        <div>
+          <h4>Check service status</h4>
+          <code>systemctl status vm-manager</code>
+          <p style="margin-top:4px">Logs: <code>journalctl -u vm-manager -f</code></p>
+        </div>
+      </div>
+    </div>
+
+    <div style="text-align:center;margin-top:2.5rem">
+      <a class="btn-primary" href="https://github.com/zeshaq/vm-manager">
+        View full documentation on GitHub →
+      </a>
+    </div>
+  </div>
+</section>
+
+<!-- FOOTER -->
+<footer>
+  <div style="margin-bottom:0.75rem">
+    <a href="https://github.com/zeshaq/vm-manager">GitHub</a> &nbsp;·&nbsp;
+    <a href="https://github.com/zeshaq/vm-manager/issues">Issues</a> &nbsp;·&nbsp;
+    <a href="https://github.com/users/zeshaq/projects/2">Project Board</a>
+  </div>
+  <p>Hypercloud VM Manager — open source KVM management for bare metal</p>
+</footer>
+
+</body>
+</html>
