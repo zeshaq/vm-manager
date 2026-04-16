@@ -202,18 +202,18 @@ export default function VMList() {
                           onClick={() => handleStart(vm.uuid)}
                           disabled={actionLoading[vm.uuid]}
                           title="Start"
-                          className="p-1.5 rounded bg-green-900/60 hover:bg-green-800 text-green-400 transition-colors disabled:opacity-50"
+                          className="flex items-center gap-1.5 px-3 py-1.5 rounded bg-green-900/60 hover:bg-green-800 text-green-400 text-xs font-medium transition-colors disabled:opacity-50"
                         >
-                          <Play size={13} />
+                          <Play size={13} /> Start
                         </button>
                       ) : (
                         <button
                           onClick={() => handleStop(vm.uuid)}
                           disabled={actionLoading[vm.uuid]}
                           title="Stop"
-                          className="p-1.5 rounded bg-yellow-900/60 hover:bg-yellow-800 text-yellow-400 transition-colors disabled:opacity-50"
+                          className="flex items-center gap-1.5 px-3 py-1.5 rounded bg-yellow-900/60 hover:bg-yellow-800 text-yellow-400 text-xs font-medium transition-colors disabled:opacity-50"
                         >
-                          <Square size={13} />
+                          <Square size={13} /> Stop
                         </button>
                       )}
                       <Link to={`/vms/${vm.uuid}`} title="View" className="p-1.5 rounded bg-navy-500 hover:bg-navy-400 text-sky-400 transition-colors">
@@ -245,14 +245,6 @@ export default function VMList() {
                           <Lock size={13} />
                         </button>
                       )}
-                      <button
-                        onClick={() => handleDelete(vm.uuid)}
-                        disabled={actionLoading[vm.uuid] || vm.locked}
-                        title={vm.locked ? 'Unlock before deleting' : 'Delete'}
-                        className="p-1.5 rounded bg-red-900/60 hover:bg-red-800 text-red-400 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                      >
-                        <Trash2 size={13} />
-                      </button>
                     </div>
                   </td>
                 </tr>
