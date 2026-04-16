@@ -98,6 +98,56 @@ def _kill_proc_group(proc: subprocess.Popen) -> None:
         proc.kill()  # fallback
 
 
+def _get_libvirt_network_info(network_name: str) -> tuple:
+    """Return (cidr, gateway) for a libvirt network, e.g. ('192.168.122.0/24', '192.168.122.1').
+
+    Parses the network XML from libvirt so we can auto-populate machine_cidr
+    and gateway when the user hasn't set them explicitly — preventing the common
+    mistake of leaving the default 192.168.100.0/24 while the bridge is virbr0
+    (192.168.122.0/24), which causes "Cannot access Rendezvous Host".
+
+    Returns (None, None) if the network cannot be queried.
+    """
+    try:
+        import ipaddress
+        import struct
+        import socket
+        import xml.etree.ElementTree as ET
+
+        conn = libvirt.open('qemu:///system')
+        net  = conn.networkLookupByName(network_name)
+        xml  = net.XMLDesc()
+        conn.close()
+
+        root     = ET.fromstring(xml)
+        ip_elem  = root.find('.//ip')
+        if ip_elem is None:
+            return None, None
+
+        addr   = ip_elem.get('address')          # bridge IP, e.g. 192.168.122.1
+        prefix = ip_elem.get('prefix')           # e.g. '24'
+        netmask = ip_elem.get('netmask')         # alternate form: '255.255.255.0'
+
+        if not addr:
+            return None, None
+
+        if prefix:
+            plen = int(prefix)
+        elif netmask:
+            packed = socket.inet_aton(netmask)
+            plen   = bin(struct.unpack('>I', packed)[0]).count('1')
+        else:
+            plen = 24
+
+        iface = ipaddress.ip_interface(f'{addr}/{plen}')
+        cidr  = str(iface.network)   # e.g. 192.168.122.0/24
+        gw    = addr                  # bridge addr = gateway for VMs
+
+        return cidr, gw
+    except Exception:
+        return None, None
+
+
 # ── Auth helper ───────────────────────────────────────────────────────────────
 
 def _auth():
@@ -498,6 +548,22 @@ def _run_agent_deploy(job_id: str, cfg: dict):
         storage_path  = Path(cfg.get('storage_path', '/var/lib/libvirt/images'))
         network       = cfg.get('libvirt_network', 'default')
 
+        # ── Auto-detect bridge subnet ─────────────────────────────────────────
+        # If machine_cidr or gateway were left at their defaults (or not set),
+        # query libvirt for the selected network's actual subnet so the ISO's
+        # static IPs match the bridge — avoiding "Cannot access Rendezvous Host".
+        _GENERIC_CIDR = '192.168.100.0/24'
+        if not cfg.get('machine_cidr') or cfg.get('machine_cidr') == _GENERIC_CIDR \
+                or not cfg.get('gateway'):
+            auto_cidr, auto_gw = _get_libvirt_network_info(network)
+            if auto_cidr:
+                if not cfg.get('machine_cidr') or cfg.get('machine_cidr') == _GENERIC_CIDR:
+                    cfg = {**cfg, 'machine_cidr': auto_cidr}
+                    log(f'  Auto-detected machine_cidr from {network!r}: {auto_cidr}')
+                if not cfg.get('gateway'):
+                    cfg = {**cfg, 'gateway': auto_gw}
+                    log(f'  Auto-detected gateway from {network!r}: {auto_gw}')
+
         job_dir = WORK_DIR / job_id
         install_dir = job_dir / 'install'
         job_dir.mkdir(exist_ok=True)
@@ -601,6 +667,21 @@ def _run_agent_deploy(job_id: str, cfg: dict):
         # We only need to write them if the ISO hasn't been built yet.
         # State for wait-for commands is in .openshift_install_state.json (created by ISO build).
         phase('Generating install-config.yaml', 10)
+
+        # ── Pre-flight: validate rendezvous IP is in machine_cidr ─────────────
+        try:
+            import ipaddress as _ipa
+            _machine_net  = _ipa.ip_network(cfg.get('machine_cidr', ''), strict=False)
+            _rendezvous   = cfg.get('rendezvous_ip') or (cfg.get('nodes') or [{}])[0].get('ip', '')
+            if _rendezvous and _ipa.ip_address(_rendezvous) not in _machine_net:
+                log(f'  ⚠ WARNING: rendezvous IP {_rendezvous} is NOT in machine_cidr '
+                    f'{cfg.get("machine_cidr")} — bootstrap will fail with '
+                    f'"Cannot access Rendezvous Host"', 'warn')
+                log(f'  Tip: set machine_cidr to match the {network!r} bridge subnet '
+                    f'or update node IPs to be within {cfg.get("machine_cidr")}', 'warn')
+        except Exception:
+            pass
+
         state_json = install_dir / '.openshift_install_state.json'
         if not saved_iso or not state_json.exists():
             ic_path = install_dir / 'install-config.yaml'
@@ -798,6 +879,19 @@ def _run_agent_deploy(job_id: str, cfg: dict):
                     phase('Bootstrap in progress', 55)
                 elif 'Bootstrap Complete' in line or 'bootstrap complete' in line.lower():
                     phase('Bootstrap complete', 65)
+                elif 'Cannot access Rendezvous Host' in line:
+                    _rendezvous = cfg.get('rendezvous_ip') or (cfg.get('nodes') or [{}])[0].get('ip', '?')
+                    log(f'  {line}')
+                    log(f'  ── Rendezvous host diagnostic ──────────────────────────', 'warn')
+                    log(f'  Rendezvous IP  : {_rendezvous}', 'warn')
+                    log(f'  machine_cidr   : {cfg.get("machine_cidr", "?")}', 'warn')
+                    log(f'  bridge/network : {network}', 'warn')
+                    log(f'  Possible causes:', 'warn')
+                    log(f'   1. VM is still booting — this message is normal for the first few minutes', 'warn')
+                    log(f'   2. rendezvousIP {_rendezvous!r} is not in the bridge subnet', 'warn')
+                    log(f'   3. Gateway mismatch — check cfg.gateway matches the bridge', 'warn')
+                    log(f'   4. NMState static IP applied the wrong interface (expected enp1s0)', 'warn')
+                    continue
                 log(f'  {line}')
 
         bootstrap_proc.wait()
