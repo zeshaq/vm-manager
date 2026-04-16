@@ -888,17 +888,17 @@ def _vm_xml(name: str, vcpus: int, ram_mb: int, disk_path: str,
   <cpu mode='host-passthrough'/>
   <clock offset='utc'/>
   <devices>
+    <disk type='file' device='disk'>
+      <driver name='qemu' type='qcow2' cache='none'/>
+      <source file='{disk_path}'/>
+      <target dev='vda' bus='virtio'/>
+      <boot order='1'/>
+    </disk>
     <disk type='file' device='cdrom'>
       <driver name='qemu' type='raw'/>
       <source file='{iso_path}'/>
       <target dev='sda' bus='sata'/>
       <readonly/>
-      <boot order='1'/>
-    </disk>
-    <disk type='file' device='disk'>
-      <driver name='qemu' type='qcow2' cache='none'/>
-      <source file='{disk_path}'/>
-      <target dev='vda' bus='virtio'/>
       <boot order='2'/>
     </disk>{extra_disks_xml}
     {iface_xml}
