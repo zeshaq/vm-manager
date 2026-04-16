@@ -17,6 +17,7 @@ import {
   Image,
   Boxes,
   Settings,
+  SlidersHorizontal,
   Shield,
   ChevronDown,
   ChevronRight,
@@ -54,10 +55,11 @@ const ocpNavItems = [
 ]
 
 const systemNavItems = [
-  { to: '/system/processes', label: 'Processes', icon: MonitorDot },
-  { to: '/system/services', label: 'Services', icon: Settings },
-  { to: '/system/firewall', label: 'Firewall (UFW)', icon: Flame },
-  { to: '/system/security', label: 'Security', icon: Lock },
+  { to: '/system/processes', label: 'Processes',     icon: MonitorDot },
+  { to: '/system/services',  label: 'Services',      icon: Settings   },
+  { to: '/system/firewall',  label: 'Firewall (UFW)', icon: Flame      },
+  { to: '/system/security',  label: 'Security',      icon: Lock       },
+  { to: '/settings',         label: 'Settings',      icon: SlidersHorizontal },
 ]
 
 // ── components ────────────────────────────────────────────────────────────────
@@ -151,6 +153,7 @@ export default function Layout({ children, username, onLogout }) {
     if (p === '/system/services')     return 'System Services'
     if (p === '/system/firewall')     return 'Firewall (UFW)'
     if (p === '/system/security')     return 'Security Overview'
+    if (p === '/settings')            return 'System Settings'
     return 'Hypercloud'
   }
 

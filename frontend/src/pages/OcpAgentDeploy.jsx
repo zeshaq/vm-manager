@@ -127,15 +127,12 @@ export default function OcpAgentDeploy() {
       .finally(() => setLoadingN(false))
   }, []) // eslint-disable-line
 
-  // Fetch saved credentials from backend if available
+  // Pre-fill from system settings (pull_secret, ssh_public_key)
   useEffect(() => {
-    api.get('/ocp-agent/credentials')
+    api.get('/settings/reveal')
       .then(r => {
-        if (r.data.configured) {
-          if (r.data.ssh_public_key && !form.ssh_public_key) {
-            set('ssh_public_key', r.data.ssh_public_key)
-          }
-        }
+        if (r.data.pull_secret    && !form.pull_secret)    set('pull_secret',    r.data.pull_secret)
+        if (r.data.ssh_public_key && !form.ssh_public_key) set('ssh_public_key', r.data.ssh_public_key)
       })
       .catch(() => {})
   }, []) // eslint-disable-line

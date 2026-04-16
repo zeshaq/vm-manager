@@ -1187,6 +1187,17 @@ export default function OpenShiftPage() {
 
   const set = (k, v) => setForm(p => ({ ...p, [k]: v }))
 
+  // Pre-fill from system settings (pull_secret, ssh_public_key, offline_token)
+  useEffect(() => {
+    api.get('/settings/reveal')
+      .then(r => {
+        if (r.data.pull_secret     && !form.pull_secret)    set('pull_secret',    r.data.pull_secret)
+        if (r.data.ssh_public_key  && !form.ssh_public_key) set('ssh_public_key', r.data.ssh_public_key)
+        if (r.data.rh_offline_token && !form.offline_token) set('offline_token',  r.data.rh_offline_token)
+      })
+      .catch(() => {})
+  }, []) // eslint-disable-line
+
   const deploy = async () => {
     setDep(true)
     setError('')
