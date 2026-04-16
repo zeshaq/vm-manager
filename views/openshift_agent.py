@@ -477,6 +477,12 @@ def _agent_config(cfg: dict) -> str:
 
         # Static IP via NMState — only when nmstatectl is installed
         if use_static_ip and ip and gateway:
+            # Do NOT include mac-address in the NMState interfaces block.
+            # nmstate 2.x looks up interfaces by MAC on the *build host* when
+            # mac-address is present; since the host has no interface with the VM's
+            # MAC, nmstate generates an empty NM config and openshift-install fails
+            # with "nmstate generated an empty NetworkManager config file content".
+            # MAC binding is already handled by host_entry['interfaces'] above.
             nc_iface: dict = {
                 'name':  iface,
                 'type':  'ethernet',
@@ -487,8 +493,6 @@ def _agent_config(cfg: dict) -> str:
                     'address': [{'ip': ip, 'prefix-length': prefix_len}],
                 },
             }
-            if mac:
-                nc_iface['mac-address'] = mac
 
             host_entry['networkConfig'] = {
                 'interfaces': [nc_iface],
