@@ -499,8 +499,8 @@ function NodeCard({ node }) {
           : isPending    ? <Radio       size={12} className="text-sky-400 animate-pulse" />
           :                <Loader2     size={12} className="text-sky-400 animate-spin" />}
         </div>
-        <span className="text-slate-100 text-xs font-semibold flex-1 truncate" title={node.name}>
-          {node.name}
+        <span className="text-slate-100 text-xs font-semibold flex-1 truncate" title={node.vm || node.name}>
+          {node.vm || node.name}
         </span>
         <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded border ${roleBadge}`}>
           {node.role === 'master' ? 'CP' : 'W'}

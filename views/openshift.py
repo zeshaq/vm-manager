@@ -1636,15 +1636,22 @@ def _run_deploy(job_id: str, cfg: dict):
                     for h in hr.json():
                         h_status = h.get('status', '')
                         h_id     = h.get('id', '')
-                        hostname = h.get('requested_hostname') or h_id[:8]
+                        hostname = h.get('requested_hostname') or ''
                         prog     = h.get('progress', {})
                         stage    = prog.get('current_stage', '')
                         stage_ts = prog.get('stage_updated_at', '')
                         pct_h    = prog.get('installation_percentage', 0)
 
+                        # Resolve display name: prefer MAC-matched VM name,
+                        # then requested_hostname, then UUID prefix as last resort
+                        vm_name = _parse_host_mac(h, mac_to_vm)
+                        display_name = vm_name or hostname or h_id[:8]
+
                         nodes_payload.append({
                             'id':       h_id,
-                            'name':     hostname,
+                            'name':     display_name,
+                            'vm':       vm_name or '',
+                            'hostname': hostname,
                             'status':   h_status,
                             'stage':    stage,
                             'pct':      pct_h,
@@ -1685,19 +1692,17 @@ def _run_deploy(job_id: str, cfg: dict):
                         if 'pending-user-action' in h_status:
                             last_t = pending_handled.get(h_id, 0)
                             if now - last_t >= 300:
-                                vm_match = _parse_host_mac(h, mac_to_vm)
+                                vm_match = vm_name or next(
+                                    (v for v in vm_names
+                                     if v == hostname or (hostname and (hostname.startswith(v) or v in hostname))),
+                                    None
+                                )
                                 if not vm_match:
-                                    vm_match = next(
-                                        (v for v in vm_names
-                                         if v == hostname or hostname.startswith(v) or v in hostname),
-                                        None
-                                    )
-                                if not vm_match:
-                                    log(f'  ⚠ {hostname} pending-user-action but VM not identified', 'warn')
+                                    log(f'  ⚠ {display_name} pending-user-action but VM not identified', 'warn')
                                     pending_handled[h_id] = now
                                 else:
-                                    log(f'  ⚠ {hostname} rebooted into ISO — ejecting and rebooting {vm_match}…', 'warn')
-                                    _job_event(job_id, 'pending_user_action', node=hostname, vm=vm_match)
+                                    log(f'  ⚠ {display_name} rebooted into ISO — ejecting and rebooting {vm_match}…', 'warn')
+                                    _job_event(job_id, 'pending_user_action', node=display_name, vm=vm_match)
                                     _eject_cdroms([vm_match], log)
                                     time.sleep(2)
                                     _reboot_vms([vm_match], log)
@@ -1959,15 +1964,22 @@ def _monitor_install_thread(job_id: str, cfg: dict, cluster_id: str):
                     for h in hr.json():
                         h_status = h.get('status', '')
                         h_id     = h.get('id', '')
-                        hostname = h.get('requested_hostname') or h_id[:8]
+                        hostname = h.get('requested_hostname') or ''
                         prog     = h.get('progress', {})
                         stage    = prog.get('current_stage', '')
                         stage_ts = prog.get('stage_updated_at', '')
                         pct_h    = prog.get('installation_percentage', 0)
 
+                        # Resolve display name: prefer MAC-matched VM name,
+                        # then requested_hostname, then UUID prefix as last resort
+                        vm_name = _parse_host_mac(h, mac_to_vm)
+                        display_name = vm_name or hostname or h_id[:8]
+
                         nodes_payload.append({
                             'id':       h_id,
-                            'name':     hostname,
+                            'name':     display_name,
+                            'vm':       vm_name or '',
+                            'hostname': hostname,
                             'status':   h_status,
                             'stage':    stage,
                             'pct':      pct_h,
@@ -1980,8 +1992,8 @@ def _monitor_install_thread(job_id: str, cfg: dict, cluster_id: str):
                         if stage and stage != prev_stage:
                             host_stages[h_id] = stage
                             if prev_stage is not None:
-                                log(f'  [{hostname}] {prev_stage or "—"} → {stage}')
-                                _job_event(job_id, 'stage_change', node=hostname,
+                                log(f'  [{display_name}] {prev_stage or "—"} → {stage}')
+                                _job_event(job_id, 'stage_change', node=display_name,
                                            from_stage=prev_stage, to_stage=stage)
                             else:
                                 host_stages[h_id] = stage
@@ -1998,8 +2010,8 @@ def _monitor_install_thread(job_id: str, cfg: dict, cluster_id: str):
                                 if stage_age > STUCK_THRESHOLD and (now - last_warn) > STUCK_REWARN:
                                     host_stuck_warn[h_id] = now
                                     mins = int(stage_age // 60)
-                                    log(f'  ⚠ [{hostname}] stuck in "{stage}" for {mins}m', 'warn')
-                                    _job_event(job_id, 'stuck', node=hostname,
+                                    log(f'  ⚠ [{display_name}] stuck in "{stage}" for {mins}m', 'warn')
+                                    _job_event(job_id, 'stuck', node=display_name,
                                                stage=stage, minutes=mins)
                             except Exception:
                                 pass
@@ -2008,19 +2020,17 @@ def _monitor_install_thread(job_id: str, cfg: dict, cluster_id: str):
                         if 'pending-user-action' in h_status:
                             last_t = pending_handled.get(h_id, 0)
                             if now - last_t >= 300:
-                                vm_match = _parse_host_mac(h, mac_to_vm)
+                                vm_match = vm_name or next(
+                                    (v for v in vm_names
+                                     if v == hostname or (hostname and (hostname.startswith(v) or v in hostname))),
+                                    None
+                                )
                                 if not vm_match:
-                                    vm_match = next(
-                                        (v for v in vm_names
-                                         if v == hostname or hostname.startswith(v) or v in hostname),
-                                        None
-                                    )
-                                if not vm_match:
-                                    log(f'  ⚠ {hostname} pending-user-action but VM not identified', 'warn')
+                                    log(f'  ⚠ {display_name} pending-user-action but VM not identified', 'warn')
                                     pending_handled[h_id] = now
                                 else:
-                                    log(f'  ⚠ {hostname} rebooted into ISO — ejecting and rebooting {vm_match}…', 'warn')
-                                    _job_event(job_id, 'pending_user_action', node=hostname, vm=vm_match)
+                                    log(f'  ⚠ {display_name} rebooted into ISO — ejecting and rebooting {vm_match}…', 'warn')
+                                    _job_event(job_id, 'pending_user_action', node=display_name, vm=vm_match)
                                     _eject_cdroms([vm_match], log)
                                     time.sleep(2)
                                     _reboot_vms([vm_match], log)
