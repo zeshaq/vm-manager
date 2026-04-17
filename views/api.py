@@ -531,12 +531,23 @@ def delete_vm(uuid):
 
         if dom.isActive():
             dom.destroy()
+
+        # Delete all snapshots first — libvirt refuses to undefine a domain
+        # that has snapshot metadata.
+        for snap_name in (dom.snapshotListNames(0) or []):
+            try:
+                dom.snapshotLookupByName(snap_name, 0).delete(0)
+            except libvirt.libvirtError:
+                pass
+
         # EFI/UEFI VMs have an NVRAM file that must be removed with the domain.
         # Plain undefine() raises libvirtError for these — use the NVRAM flag.
+        flags = (libvirt.VIR_DOMAIN_UNDEFINE_NVRAM |
+                 libvirt.VIR_DOMAIN_UNDEFINE_SNAPSHOTS_METADATA)
         try:
-            dom.undefineFlags(libvirt.VIR_DOMAIN_UNDEFINE_NVRAM)
+            dom.undefineFlags(flags)
         except libvirt.libvirtError:
-            dom.undefine()   # fallback for non-EFI or older libvirt
+            dom.undefine()   # fallback for older libvirt
 
         # Remove disk files — skip backing files (cloud base images)
         deleted, skipped = [], []
